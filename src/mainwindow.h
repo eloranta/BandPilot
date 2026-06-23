@@ -15,10 +15,14 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget *parent = nullptr);
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     bool initializeDatabase();
     bool seedDatabase();
     bool addLoggedContact(const UdpLoggedContact &contact);
+    bool deleteSelectedContacts();
     void setupModel();
     void setupUi();
 

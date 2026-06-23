@@ -3,7 +3,10 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QEvent>
 #include <QHeaderView>
+#include <QItemSelectionModel>
+#include <QKeyEvent>
 #include <QMessageBox>
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -13,6 +16,8 @@
 #include <QStatusBar>
 #include <QStringList>
 #include <QTableView>
+
+#include <algorithm>
 
 namespace {
 
@@ -80,6 +85,19 @@ MainWindow::MainWindow(QWidget *parent)
     if (!m_udpReceiver->start()) {
         statusBar()->showMessage("UDP listener failed");
     }
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_tableView && event->type() == QEvent::KeyPress) {
+        QKeyEvent *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Delete) {
+            deleteSelectedContacts();
+            return true;
+        }
+    }
+
+    return QMainWindow::eventFilter(watched, event);
 }
 
 bool MainWindow::initializeDatabase()
@@ -239,6 +257,45 @@ bool MainWindow::addLoggedContact(const UdpLoggedContact &contact)
     return true;
 }
 
+bool MainWindow::deleteSelectedContacts()
+{
+    const QModelIndexList selectedRows = m_tableView->selectionModel()->selectedRows();
+    if (selectedRows.isEmpty()) {
+        return false;
+    }
+
+    QList<int> rows;
+    rows.reserve(selectedRows.size());
+    for (const QModelIndex &index : selectedRows) {
+        rows.append(index.row());
+    }
+
+    std::sort(rows.begin(), rows.end(), std::greater<int>());
+
+    for (int row : rows) {
+        if (!m_model->removeRow(row)) {
+            statusBar()->showMessage(m_model->lastError().text(), 5000);
+            m_model->revertAll();
+            return false;
+        }
+    }
+
+    if (!m_model->submitAll()) {
+        statusBar()->showMessage(m_model->lastError().text(), 5000);
+        m_model->revertAll();
+        m_model->select();
+        return false;
+    }
+
+    const int deletedCount = rows.size();
+    m_model->select();
+    statusBar()->showMessage(QStringLiteral("Deleted %1 contact%2")
+                                 .arg(deletedCount)
+                                 .arg(deletedCount == 1 ? QString() : QStringLiteral("s")),
+                             5000);
+    return true;
+}
+
 void MainWindow::setupModel()
 {
     m_model = new QSqlTableModel(this, QSqlDatabase::database(kConnectionName));
@@ -264,8 +321,9 @@ void MainWindow::setupUi()
     m_tableView->setModel(m_model);
     m_tableView->setAlternatingRowColors(true);
     m_tableView->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_tableView->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_tableView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_tableView->setSortingEnabled(true);
+    m_tableView->installEventFilter(this);
     m_tableView->hideColumn(m_model->fieldIndex("id"));
     m_tableView->horizontalHeader()->setStretchLastSection(true);
     m_tableView->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
