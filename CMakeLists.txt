@@ -6,13 +6,19 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Sql)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Sql)
+if(WIN32 AND NOT CMAKE_PREFIX_PATH AND EXISTS "C:/Qt/6.9.0/mingw_64/lib/cmake/Qt6/Qt6Config.cmake")
+    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.9.0/mingw_64")
+endif()
+
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Sql Network)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Sql Network)
 
 set(PROJECT_SOURCES
     src/main.cpp
     src/mainwindow.cpp
     src/mainwindow.h
+    src/udpreceiver.cpp
+    src/udpreceiver.h
 )
 
 if(QT_VERSION_MAJOR GREATER_EQUAL 6)
@@ -24,7 +30,7 @@ else()
     add_executable(BandPilot ${PROJECT_SOURCES})
 endif()
 
-target_link_libraries(BandPilot PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Sql)
+target_link_libraries(BandPilot PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Sql Qt${QT_VERSION_MAJOR}::Network)
 
 target_include_directories(BandPilot PRIVATE src)
 

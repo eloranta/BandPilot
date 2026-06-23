@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "udpreceiver.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -68,6 +69,11 @@ MainWindow::MainWindow(QWidget *parent)
 
     setupModel();
     setupUi();
+
+    m_udpReceiver = new UdpReceiver(this);
+    if (!m_udpReceiver->start()) {
+        statusBar()->showMessage("UDP listener failed");
+    }
 }
 
 bool MainWindow::initializeDatabase()

@@ -5,6 +5,7 @@
 
 class QSqlTableModel;
 class QTableView;
+class UdpReceiver;
 
 class MainWindow : public QMainWindow
 {
@@ -21,6 +22,7 @@ private:
 
     QSqlTableModel *m_model = nullptr;
     QTableView *m_tableView = nullptr;
+    UdpReceiver *m_udpReceiver = nullptr;
 };
 
 #endif // MAINWINDOW_H
