@@ -4,10 +4,12 @@
     {
       "name": "mingw-debug",
       "displayName": "MinGW Debug",
-      "generator": "Ninja Multi-Config",
+      "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-mingw",
       "cacheVariables": {
-        "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo;MinSizeRel"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.9.1/mingw_64",
+        "CMAKE_MAKE_PROGRAM": "C:/Qt/Tools/Ninja/ninja.exe"
       }
     }
   ],
@@ -15,8 +17,7 @@
     {
       "name": "mingw-debug",
       "displayName": "MinGW Debug",
-      "configurePreset": "mingw-debug",
-      "configuration": "Debug"
+      "configurePreset": "mingw-debug"
     }
   ]
 }

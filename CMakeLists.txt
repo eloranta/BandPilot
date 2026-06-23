@@ -6,8 +6,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-if(WIN32 AND NOT CMAKE_PREFIX_PATH AND EXISTS "C:/Qt/6.9.0/mingw_64/lib/cmake/Qt6/Qt6Config.cmake")
-    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.9.0/mingw_64")
+if(WIN32 AND NOT CMAKE_PREFIX_PATH AND EXISTS "C:/Qt/6.9.1/mingw_64/lib/cmake/Qt6/Qt6Config.cmake")
+    list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.9.1/mingw_64")
 endif()
 
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Sql Network)

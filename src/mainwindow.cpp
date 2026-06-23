@@ -71,6 +71,12 @@ MainWindow::MainWindow(QWidget *parent)
     setupUi();
 
     m_udpReceiver = new UdpReceiver(this);
+    connect(m_udpReceiver, &UdpReceiver::loggedContactReceived, this, [this](const UdpLoggedContact &contact) {
+        if (addLoggedContact(contact)) {
+            statusBar()->showMessage(QStringLiteral("Logged UDP contact: %1").arg(contact.call), 5000);
+        }
+    });
+
     if (!m_udpReceiver->start()) {
         statusBar()->showMessage("UDP listener failed");
     }
@@ -202,6 +208,34 @@ bool MainWindow::seedDatabase()
         return false;
     }
 
+    return true;
+}
+
+bool MainWindow::addLoggedContact(const UdpLoggedContact &contact)
+{
+    QSqlDatabase database = QSqlDatabase::database(kConnectionName);
+
+    QSqlQuery insertQuery(database);
+    insertQuery.prepare(QStringLiteral(
+        "INSERT INTO contacts (date, time_on, time_off, call, band, frequency, mode, submode, comment) "
+        "VALUES (:date, :time_on, :time_off, :call, :band, :frequency, :mode, :submode, :comment)"));
+    insertQuery.bindValue(QStringLiteral(":date"), contact.date.toString(Qt::ISODate));
+    insertQuery.bindValue(QStringLiteral(":time_on"), contact.timeOn.toString(QStringLiteral("HH:mm:ss")));
+    insertQuery.bindValue(QStringLiteral(":time_off"), contact.timeOff.toString(QStringLiteral("HH:mm:ss")));
+    insertQuery.bindValue(QStringLiteral(":call"), contact.call);
+    insertQuery.bindValue(QStringLiteral(":band"), contact.band);
+    insertQuery.bindValue(QStringLiteral(":frequency"), contact.frequency);
+    insertQuery.bindValue(QStringLiteral(":mode"), contact.mode);
+    insertQuery.bindValue(QStringLiteral(":submode"), contact.submode);
+    insertQuery.bindValue(QStringLiteral(":comment"), contact.comment);
+
+    if (!insertQuery.exec()) {
+        statusBar()->showMessage(insertQuery.lastError().text(), 5000);
+        return false;
+    }
+
+    m_model->select();
+    m_tableView->resizeColumnsToContents();
     return true;
 }
 

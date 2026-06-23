@@ -3,7 +3,10 @@
 #include <QDataStream>
 #include <QDateTime>
 #include <QDebug>
+#include <QStringList>
 #include <QTime>
+
+#include <optional>
 
 namespace {
 
@@ -37,6 +40,18 @@ QString bandFromHz(quint64 hz)
     return {};
 }
 
+QString frequencyFromHz(quint64 hz)
+{
+    QString frequency = QString::number(double(hz) / 1000000.0, 'f', 6);
+    while (frequency.endsWith(QLatin1Char('0'))) {
+        frequency.chop(1);
+    }
+    if (frequency.endsWith(QLatin1Char('.'))) {
+        frequency.chop(1);
+    }
+    return frequency;
+}
+
 QString modeCategory(const QString &mode)
 {
     const QString upper = mode.trimmed().toUpper();
@@ -54,6 +69,17 @@ QString modeCategory(const QString &mode)
         return QStringLiteral("Sat");
     }
     return QStringLiteral("Data");
+}
+
+QString joinCommentParts(const QStringList &parts)
+{
+    QStringList filtered;
+    for (const QString &part : parts) {
+        if (!part.trimmed().isEmpty()) {
+            filtered.append(part.trimmed());
+        }
+    }
+    return filtered.join(QStringLiteral("; "));
 }
 
 bool decodeType2(QDataStream &stream, const QString &id)
@@ -95,7 +121,7 @@ bool decodeType2(QDataStream &stream, const QString &id)
     return true;
 }
 
-bool decodeType5(QDataStream &stream, const QString &id)
+std::optional<UdpLoggedContact> decodeType5(QDataStream &stream, const QString &id)
 {
     QDateTime dateTimeOff;
     stream >> dateTimeOff;
@@ -115,8 +141,11 @@ bool decodeType5(QDataStream &stream, const QString &id)
 
     if (stream.status() != QDataStream::Ok) {
         qWarning() << "UDP WSJT-X type 5 decode failed:" << stream.status();
-        return false;
+        return std::nullopt;
     }
+
+    const QString band = bandFromHz(dialFreqHz);
+    const QString mode = modeCategory(submode);
 
     qDebug().noquote()
         << "UDP WSJT-X QSO_LOGGED"
@@ -125,9 +154,9 @@ bool decodeType5(QDataStream &stream, const QString &id)
         << "time_off=" << dateTimeOff.time().toString(QStringLiteral("HH:mm:ss"))
         << "call=" << dxCall
         << "grid=" << dxGrid
-        << "band=" << bandFromHz(dialFreqHz)
+        << "band=" << band
         << "frequency_hz=" << dialFreqHz
-        << "mode=" << modeCategory(submode)
+        << "mode=" << mode
         << "submode=" << submode
         << "rst_sent=" << reportSent
         << "rst_received=" << reportReceived
@@ -135,10 +164,28 @@ bool decodeType5(QDataStream &stream, const QString &id)
         << "name=" << name
         << "comment=" << comment;
 
-    return true;
+    UdpLoggedContact contact;
+    contact.date = dateTimeOff.date();
+    contact.timeOn = dateTimeOff.time();
+    contact.timeOff = dateTimeOff.time();
+    contact.call = dxCall;
+    contact.band = band;
+    contact.frequency = frequencyFromHz(dialFreqHz);
+    contact.mode = mode;
+    contact.submode = submode;
+    contact.comment = joinCommentParts({
+        comment,
+        dxGrid.isEmpty() ? QString() : QStringLiteral("Grid: %1").arg(dxGrid),
+        reportSent.isEmpty() ? QString() : QStringLiteral("RST sent: %1").arg(reportSent),
+        reportReceived.isEmpty() ? QString() : QStringLiteral("RST received: %1").arg(reportReceived),
+        txPower.isEmpty() ? QString() : QStringLiteral("Power: %1").arg(txPower),
+        name.isEmpty() ? QString() : QStringLiteral("Name: %1").arg(name)
+    });
+
+    return contact;
 }
 
-bool decodeType6(QDataStream &stream, const QString &id)
+std::optional<UdpLoggedContact> decodeType6(QDataStream &stream, const QString &id)
 {
     QDateTime dateTimeOff;
     stream >> dateTimeOff;
@@ -168,8 +215,11 @@ bool decodeType6(QDataStream &stream, const QString &id)
 
     if (stream.status() != QDataStream::Ok) {
         qWarning() << "UDP WSJT-X type 6 decode failed:" << stream.status();
-        return false;
+        return std::nullopt;
     }
+
+    const QString band = bandFromHz(txFreqHz);
+    const QString mode = modeCategory(submode);
 
     qDebug().noquote()
         << "UDP WSJT-X LOGGED_ADIF"
@@ -179,9 +229,9 @@ bool decodeType6(QDataStream &stream, const QString &id)
         << "time_off=" << dateTimeOff.time().toString(QStringLiteral("HH:mm:ss"))
         << "call=" << dxCall
         << "grid=" << dxGrid
-        << "band=" << bandFromHz(txFreqHz)
+        << "band=" << band
         << "frequency_hz=" << txFreqHz
-        << "mode=" << modeCategory(submode)
+        << "mode=" << mode
         << "submode=" << submode
         << "rst_sent=" << reportSent
         << "rst_received=" << reportReceived
@@ -195,10 +245,34 @@ bool decodeType6(QDataStream &stream, const QString &id)
         << "propagation=" << adifPropagationMode
         << "comment=" << comment;
 
-    return true;
+    UdpLoggedContact contact;
+    contact.date = dateTimeOff.date();
+    contact.timeOn = dateTimeOn.time();
+    contact.timeOff = dateTimeOff.time();
+    contact.call = dxCall;
+    contact.band = band;
+    contact.frequency = frequencyFromHz(txFreqHz);
+    contact.mode = mode;
+    contact.submode = submode;
+    contact.comment = joinCommentParts({
+        comment,
+        dxGrid.isEmpty() ? QString() : QStringLiteral("Grid: %1").arg(dxGrid),
+        reportSent.isEmpty() ? QString() : QStringLiteral("RST sent: %1").arg(reportSent),
+        reportReceived.isEmpty() ? QString() : QStringLiteral("RST received: %1").arg(reportReceived),
+        txPower.isEmpty() ? QString() : QStringLiteral("Power: %1").arg(txPower),
+        name.isEmpty() ? QString() : QStringLiteral("Name: %1").arg(name),
+        operatorCall.isEmpty() ? QString() : QStringLiteral("Operator: %1").arg(operatorCall),
+        myCall.isEmpty() ? QString() : QStringLiteral("Station: %1").arg(myCall),
+        myGrid.isEmpty() ? QString() : QStringLiteral("Station grid: %1").arg(myGrid),
+        exchangeSent.isEmpty() ? QString() : QStringLiteral("Exchange sent: %1").arg(exchangeSent),
+        exchangeReceived.isEmpty() ? QString() : QStringLiteral("Exchange received: %1").arg(exchangeReceived),
+        adifPropagationMode.isEmpty() ? QString() : QStringLiteral("Propagation: %1").arg(adifPropagationMode)
+    });
+
+    return contact;
 }
 
-void decodeWsjtxDatagram(const QByteArray &datagram)
+std::optional<UdpLoggedContact> decodeWsjtxDatagram(const QByteArray &datagram)
 {
     QDataStream stream(datagram);
     stream.setByteOrder(QDataStream::BigEndian);
@@ -210,7 +284,7 @@ void decodeWsjtxDatagram(const QByteArray &datagram)
 
     if (magic != 0xadbccbda) {
         qDebug() << "UDP datagram is not WSJT-X. First bytes:" << datagram.left(16).toHex(' ');
-        return;
+        return std::nullopt;
     }
 
     setStreamVersionFromSchema(stream, schema);
@@ -228,16 +302,16 @@ void decodeWsjtxDatagram(const QByteArray &datagram)
         decodeType2(stream, id);
         break;
     case 5:
-        decodeType5(stream, id);
-        break;
+        return decodeType5(stream, id);
     case 6:
-        decodeType6(stream, id);
-        break;
+        return decodeType6(stream, id);
     default:
         qDebug() << "UDP WSJT-X unhandled message type:" << type
                  << "remaining bytes:" << (stream.device() ? stream.device()->bytesAvailable() : -1);
         break;
     }
+
+    return std::nullopt;
 }
 
 } // namespace
@@ -283,6 +357,9 @@ void UdpReceiver::onReadyRead()
 
         qDebug() << "UDP datagram from" << sender.toString() << ":" << senderPort
                  << "bytes=" << bytesRead;
-        decodeWsjtxDatagram(datagram);
+        const std::optional<UdpLoggedContact> loggedContact = decodeWsjtxDatagram(datagram);
+        if (loggedContact.has_value()) {
+            emit loggedContactReceived(loggedContact.value());
+        }
     }
 }

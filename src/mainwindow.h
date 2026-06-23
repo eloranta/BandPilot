@@ -6,6 +6,7 @@
 class QSqlTableModel;
 class QTableView;
 class UdpReceiver;
+struct UdpLoggedContact;
 
 class MainWindow : public QMainWindow
 {
@@ -17,6 +18,7 @@ public:
 private:
     bool initializeDatabase();
     bool seedDatabase();
+    bool addLoggedContact(const UdpLoggedContact &contact);
     void setupModel();
     void setupUi();
 
