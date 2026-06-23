@@ -4,10 +4,10 @@
     {
       "name": "mingw-debug",
       "displayName": "MinGW Debug",
-      "generator": "Ninja",
+      "generator": "Ninja Multi-Config",
       "binaryDir": "${sourceDir}/build-mingw",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo;MinSizeRel"
       }
     }
   ],
@@ -15,7 +15,8 @@
     {
       "name": "mingw-debug",
       "displayName": "MinGW Debug",
-      "configurePreset": "mingw-debug"
+      "configurePreset": "mingw-debug",
+      "configuration": "Debug"
     }
   ]
 }
