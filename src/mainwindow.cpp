@@ -1,41 +1,37 @@
 #include "mainwindow.h"
 
-#include <QComboBox>
-#include <QDateTime>
-#include <QFormLayout>
-#include <QGroupBox>
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QListWidget>
-#include <QPushButton>
-#include <QSpinBox>
+#include <QCoreApplication>
+#include <QDir>
+#include <QHeaderView>
+#include <QMessageBox>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
+#include <QSqlRecord>
+#include <QSqlTableModel>
 #include <QStatusBar>
-#include <QTextEdit>
-#include <QVBoxLayout>
-#include <QWidget>
-
-#include <iterator>
+#include <QTableView>
 
 namespace {
 
-struct BandInfo
+constexpr const char *kConnectionName = "bandpilot";
+constexpr const char *kTableName = "contacts";
+
+struct SeedContact
 {
-    const char *name;
-    const char *range;
-    const char *note;
+    const char *date;
+    const char *time;
+    const char *call;
+    const char *band;
+    const char *mode;
 };
 
-const BandInfo kBands[] = {
-    {"160 m", "1.800 - 2.000 MHz", "Best after dark; watch local noise."},
-    {"80 m", "3.500 - 4.000 MHz", "Regional night-time coverage."},
-    {"40 m", "7.000 - 7.300 MHz", "Reliable day and night workhorse."},
-    {"30 m", "10.100 - 10.150 MHz", "CW and digital activity."},
-    {"20 m", "14.000 - 14.350 MHz", "Primary daytime DX band."},
-    {"17 m", "18.068 - 18.168 MHz", "Often opens when 20 m is crowded."},
-    {"15 m", "21.000 - 21.450 MHz", "Good daylight DX when conditions support it."},
-    {"12 m", "24.890 - 24.990 MHz", "Solar-cycle dependent DX."},
-    {"10 m", "28.000 - 29.700 MHz", "Long-distance openings can be strong and brief."},
-    {"6 m", "50.000 - 54.000 MHz", "Monitor for sporadic-E and weak-signal openings."}
+const SeedContact kSeedContacts[] = {
+    {"2026-06-23", "09:14", "OH2ABC", "20 m", "SSB"},
+    {"2026-06-23", "10:02", "K1XYZ", "15 m", "CW"},
+    {"2026-06-23", "11:37", "JA7QSO", "10 m", "FT8"},
+    {"2026-06-23", "13:20", "DL5HAM", "40 m", "SSB"},
+    {"2026-06-23", "15:48", "VK3LOG", "17 m", "FT4"}
 };
 
 } // namespace
@@ -43,117 +39,116 @@ const BandInfo kBands[] = {
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    buildUi();
-    populateBands();
-    updateBandDetails();
-}
-
-void MainWindow::buildUi()
-{
     setWindowTitle("BandPilot");
-    resize(900, 560);
+    resize(760, 420);
 
-    auto *central = new QWidget(this);
-    auto *mainLayout = new QVBoxLayout(central);
-
-    auto *topLayout = new QHBoxLayout;
-
-    auto *stationGroup = new QGroupBox("Station", central);
-    auto *stationForm = new QFormLayout(stationGroup);
-
-    m_bandCombo = new QComboBox(stationGroup);
-    m_modeCombo = new QComboBox(stationGroup);
-    m_modeCombo->addItems({"CW", "SSB", "FT8", "FT4", "RTTY", "FM"});
-
-    m_powerSpin = new QSpinBox(stationGroup);
-    m_powerSpin->setRange(1, 1500);
-    m_powerSpin->setValue(100);
-    m_powerSpin->setSuffix(" W");
-
-    m_frequencyLabel = new QLabel(stationGroup);
-    m_statusLabel = new QLabel(stationGroup);
-    m_statusLabel->setWordWrap(true);
-
-    stationForm->addRow("Band", m_bandCombo);
-    stationForm->addRow("Mode", m_modeCombo);
-    stationForm->addRow("Power", m_powerSpin);
-    stationForm->addRow("Range", m_frequencyLabel);
-    stationForm->addRow("Hint", m_statusLabel);
-
-    auto *planGroup = new QGroupBox("Operating Plan", central);
-    auto *planLayout = new QVBoxLayout(planGroup);
-    m_planList = new QListWidget(planGroup);
-    m_planList->addItems({
-        "Check antenna match",
-        "Listen before transmitting",
-        "Call CQ or answer a strong station",
-        "Log the contact and signal report"
-    });
-    planLayout->addWidget(m_planList);
-
-    topLayout->addWidget(stationGroup, 1);
-    topLayout->addWidget(planGroup, 1);
-
-    auto *logGroup = new QGroupBox("Session Log", central);
-    auto *logLayout = new QVBoxLayout(logGroup);
-    m_logEdit = new QTextEdit(logGroup);
-    m_logEdit->setReadOnly(true);
-
-    auto *buttonLayout = new QHBoxLayout;
-    buttonLayout->addStretch();
-    m_addButton = new QPushButton("Add Entry", logGroup);
-    m_clearButton = new QPushButton("Clear", logGroup);
-    buttonLayout->addWidget(m_addButton);
-    buttonLayout->addWidget(m_clearButton);
-
-    logLayout->addWidget(m_logEdit);
-    logLayout->addLayout(buttonLayout);
-
-    mainLayout->addLayout(topLayout);
-    mainLayout->addWidget(logGroup, 1);
-    setCentralWidget(central);
-
-    statusBar()->showMessage("Ready");
-
-    connect(m_bandCombo, &QComboBox::currentIndexChanged, this, &MainWindow::updateBandDetails);
-    connect(m_addButton, &QPushButton::clicked, this, &MainWindow::addLogEntry);
-    connect(m_clearButton, &QPushButton::clicked, this, &MainWindow::clearLog);
-}
-
-void MainWindow::populateBands()
-{
-    for (const BandInfo &band : kBands) {
-        m_bandCombo->addItem(band.name, QString::fromLatin1(band.range));
-    }
-}
-
-void MainWindow::updateBandDetails()
-{
-    const int index = m_bandCombo->currentIndex();
-    if (index < 0 || index >= static_cast<int>(std::size(kBands))) {
-        return;
+    if (!initializeDatabase()) {
+        QMessageBox::critical(this, "Database Error",
+                              "Could not initialize the BandPilot database.");
     }
 
-    const BandInfo &band = kBands[index];
-    m_frequencyLabel->setText(QString::fromLatin1(band.range));
-    m_statusLabel->setText(QString::fromLatin1(band.note));
-    statusBar()->showMessage(QString("Selected %1").arg(QString::fromLatin1(band.name)));
+    setupModel();
+    setupUi();
 }
 
-void MainWindow::addLogEntry()
+bool MainWindow::initializeDatabase()
 {
-    const QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
-    const QString entry = QString("[%1] %2 %3 at %4")
-                              .arg(timestamp,
-                                   m_bandCombo->currentText(),
-                                   m_modeCombo->currentText(),
-                                   m_powerSpin->text());
-    m_logEdit->append(entry);
-    statusBar()->showMessage("Entry added", 3000);
+    QSqlDatabase database;
+    if (QSqlDatabase::contains(kConnectionName)) {
+        database = QSqlDatabase::database(kConnectionName);
+    } else {
+        database = QSqlDatabase::addDatabase("QSQLITE", kConnectionName);
+    }
+
+    const QString databasePath = QCoreApplication::applicationDirPath()
+                                 + QDir::separator()
+                                 + "bandpilot.sqlite";
+    database.setDatabaseName(databasePath);
+
+    if (!database.open()) {
+        statusBar()->showMessage(database.lastError().text());
+        return false;
+    }
+
+    QSqlQuery query(database);
+    if (!query.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS contacts ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "date TEXT NOT NULL,"
+            "time TEXT NOT NULL,"
+            "call TEXT NOT NULL,"
+            "band TEXT NOT NULL,"
+            "mode TEXT NOT NULL"
+            ")"))) {
+        statusBar()->showMessage(query.lastError().text());
+        return false;
+    }
+
+    return seedDatabase();
 }
 
-void MainWindow::clearLog()
+bool MainWindow::seedDatabase()
 {
-    m_logEdit->clear();
-    statusBar()->showMessage("Log cleared", 3000);
+    QSqlDatabase database = QSqlDatabase::database(kConnectionName);
+    QSqlQuery countQuery(database);
+    if (!countQuery.exec(QStringLiteral("SELECT COUNT(*) FROM contacts")) || !countQuery.next()) {
+        statusBar()->showMessage(countQuery.lastError().text());
+        return false;
+    }
+
+    if (countQuery.value(0).toInt() > 0) {
+        return true;
+    }
+
+    QSqlQuery insertQuery(database);
+    insertQuery.prepare(QStringLiteral(
+        "INSERT INTO contacts (date, time, call, band, mode) "
+        "VALUES (:date, :time, :call, :band, :mode)"));
+
+    for (const SeedContact &contact : kSeedContacts) {
+        insertQuery.bindValue(QStringLiteral(":date"), QString::fromLatin1(contact.date));
+        insertQuery.bindValue(QStringLiteral(":time"), QString::fromLatin1(contact.time));
+        insertQuery.bindValue(QStringLiteral(":call"), QString::fromLatin1(contact.call));
+        insertQuery.bindValue(QStringLiteral(":band"), QString::fromLatin1(contact.band));
+        insertQuery.bindValue(QStringLiteral(":mode"), QString::fromLatin1(contact.mode));
+
+        if (!insertQuery.exec()) {
+            statusBar()->showMessage(insertQuery.lastError().text());
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void MainWindow::setupModel()
+{
+    m_model = new QSqlTableModel(this, QSqlDatabase::database(kConnectionName));
+    m_model->setTable(kTableName);
+    m_model->setEditStrategy(QSqlTableModel::OnFieldChange);
+    m_model->setSort(m_model->fieldIndex("date"), Qt::AscendingOrder);
+    m_model->select();
+
+    m_model->setHeaderData(m_model->fieldIndex("date"), Qt::Horizontal, "Date");
+    m_model->setHeaderData(m_model->fieldIndex("time"), Qt::Horizontal, "Time");
+    m_model->setHeaderData(m_model->fieldIndex("call"), Qt::Horizontal, "Call");
+    m_model->setHeaderData(m_model->fieldIndex("band"), Qt::Horizontal, "Band");
+    m_model->setHeaderData(m_model->fieldIndex("mode"), Qt::Horizontal, "Mode");
+}
+
+void MainWindow::setupUi()
+{
+    m_tableView = new QTableView(this);
+    m_tableView->setModel(m_model);
+    m_tableView->setAlternatingRowColors(true);
+    m_tableView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_tableView->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_tableView->setSortingEnabled(true);
+    m_tableView->hideColumn(m_model->fieldIndex("id"));
+    m_tableView->horizontalHeader()->setStretchLastSection(true);
+    m_tableView->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    m_tableView->resizeColumnsToContents();
+
+    setCentralWidget(m_tableView);
+    statusBar()->showMessage("Database ready");
 }
