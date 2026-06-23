@@ -1,0 +1,10 @@
+build/
+build-mingw/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+.idea/
+.vscode/
+.DS_Store
