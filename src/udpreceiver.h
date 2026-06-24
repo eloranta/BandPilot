@@ -11,8 +11,7 @@
 struct UdpLoggedContact
 {
     QDate date;
-    QTime timeOn;
-    QTime timeOff;
+    QTime time;
     QString call;
     QString band;
     QString frequency;

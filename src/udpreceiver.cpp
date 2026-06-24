@@ -3,6 +3,7 @@
 #include <QDataStream>
 #include <QDateTime>
 #include <QDebug>
+#include <QRegularExpression>
 #include <QStringList>
 #include <QTime>
 
@@ -82,6 +83,16 @@ QString joinCommentParts(const QStringList &parts)
     return filtered.join(QStringLiteral("; "));
 }
 
+QString validGrid(const QString &grid)
+{
+    static const QRegularExpression pattern(
+        QStringLiteral("^[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)?$"),
+        QRegularExpression::CaseInsensitiveOption);
+
+    const QString trimmed = grid.trimmed();
+    return pattern.match(trimmed).hasMatch() ? trimmed : QString();
+}
+
 bool decodeType2(QDataStream &stream, const QString &id)
 {
     bool isNew = false;
@@ -146,6 +157,7 @@ std::optional<UdpLoggedContact> decodeType5(QDataStream &stream, const QString &
 
     const QString band = bandFromHz(dialFreqHz);
     const QString mode = modeCategory(submode);
+    const QString grid = validGrid(dxGrid);
 
     qDebug().noquote()
         << "UDP WSJT-X QSO_LOGGED"
@@ -166,8 +178,7 @@ std::optional<UdpLoggedContact> decodeType5(QDataStream &stream, const QString &
 
     UdpLoggedContact contact;
     contact.date = dateTimeOff.date();
-    contact.timeOn = dateTimeOff.time();
-    contact.timeOff = dateTimeOff.time();
+    contact.time = dateTimeOff.time();
     contact.call = dxCall;
     contact.band = band;
     contact.frequency = frequencyFromHz(dialFreqHz);
@@ -175,7 +186,7 @@ std::optional<UdpLoggedContact> decodeType5(QDataStream &stream, const QString &
     contact.submode = submode;
     contact.comment = joinCommentParts({
         comment,
-        dxGrid.isEmpty() ? QString() : QStringLiteral("Grid: %1").arg(dxGrid),
+        grid.isEmpty() ? QString() : QStringLiteral("Grid: %1").arg(grid),
         reportSent.isEmpty() ? QString() : QStringLiteral("RST sent: %1").arg(reportSent),
         reportReceived.isEmpty() ? QString() : QStringLiteral("RST received: %1").arg(reportReceived),
         txPower.isEmpty() ? QString() : QStringLiteral("Power: %1").arg(txPower),
@@ -220,6 +231,7 @@ std::optional<UdpLoggedContact> decodeType6(QDataStream &stream, const QString &
 
     const QString band = bandFromHz(txFreqHz);
     const QString mode = modeCategory(submode);
+    const QString grid = validGrid(dxGrid);
 
     qDebug().noquote()
         << "UDP WSJT-X LOGGED_ADIF"
@@ -247,8 +259,7 @@ std::optional<UdpLoggedContact> decodeType6(QDataStream &stream, const QString &
 
     UdpLoggedContact contact;
     contact.date = dateTimeOff.date();
-    contact.timeOn = dateTimeOn.time();
-    contact.timeOff = dateTimeOff.time();
+    contact.time = dateTimeOff.time();
     contact.call = dxCall;
     contact.band = band;
     contact.frequency = frequencyFromHz(txFreqHz);
@@ -256,7 +267,7 @@ std::optional<UdpLoggedContact> decodeType6(QDataStream &stream, const QString &
     contact.submode = submode;
     contact.comment = joinCommentParts({
         comment,
-        dxGrid.isEmpty() ? QString() : QStringLiteral("Grid: %1").arg(dxGrid),
+        grid.isEmpty() ? QString() : QStringLiteral("Grid: %1").arg(grid),
         reportSent.isEmpty() ? QString() : QStringLiteral("RST sent: %1").arg(reportSent),
         reportReceived.isEmpty() ? QString() : QStringLiteral("RST received: %1").arg(reportReceived),
         txPower.isEmpty() ? QString() : QStringLiteral("Power: %1").arg(txPower),
