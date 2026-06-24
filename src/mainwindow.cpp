@@ -23,7 +23,7 @@ namespace {
 
 constexpr const char *kConnectionName = "bandpilot";
 constexpr const char *kTableName = "contacts";
-constexpr const char *kSeedVersion = "3";
+constexpr const char *kSeedVersion = "4";
 
 struct SeedContact
 {
@@ -34,16 +34,19 @@ struct SeedContact
     const char *frequency;
     const char *mode;
     const char *submode;
+    const char *grid;
+    const char *rstTx;
+    const char *rstRx;
     const char *comment;
 };
 
 const SeedContact kSeedContacts[] = {
-    {"2026-06-23", "09:18", "OH2ABC", "20 m", "14.225", "Phone", "USB", "Strong signal from Helsinki"},
-    {"2026-06-23", "10:05", "K1XYZ", "15 m", "21.035", "CW", "", "Quick morning contact"},
-    {"2026-06-23", "11:39", "JA7QSO", "10 m", "28.074", "Data", "FT8", "Good decode on short opening"},
-    {"2026-06-23", "13:26", "DL5HAM", "40 m", "7.145", "Phone", "LSB", "Portable station"},
-    {"2026-06-23", "15:50", "VK3LOG", "17 m", "18.104", "Data", "FT4", "Long path contact"},
-    {"2026-06-23", "18:17", "AO-91", "2 m", "145.960", "Sat", "FM", "Satellite pass contact"}
+    {"2026-06-23", "09:18", "OH2ABC", "20 m", "14.225", "Phone", "USB", "", "", "", "Strong signal from Helsinki"},
+    {"2026-06-23", "10:05", "K1XYZ", "15 m", "21.035", "CW", "", "", "", "", "Quick morning contact"},
+    {"2026-06-23", "11:39", "JA7QSO", "10 m", "28.074", "Data", "FT8", "", "", "", "Good decode on short opening"},
+    {"2026-06-23", "13:26", "DL5HAM", "40 m", "7.145", "Phone", "LSB", "", "", "", "Portable station"},
+    {"2026-06-23", "15:50", "VK3LOG", "17 m", "18.104", "Data", "FT4", "", "", "", "Long path contact"},
+    {"2026-06-23", "18:17", "AO-91", "2 m", "145.960", "Sat", "FM", "", "", "", "Satellite pass contact"}
 };
 
 const QStringList kContactFields = {
@@ -54,6 +57,9 @@ const QStringList kContactFields = {
     QStringLiteral("frequency"),
     QStringLiteral("mode"),
     QStringLiteral("submode"),
+    QStringLiteral("grid"),
+    QStringLiteral("rst_tx"),
+    QStringLiteral("rst_rx"),
     QStringLiteral("comment")
 };
 
@@ -150,11 +156,48 @@ bool MainWindow::initializeDatabase()
                         "frequency TEXT NOT NULL,"
                         "mode TEXT NOT NULL,"
                         "submode TEXT,"
+                        "grid TEXT,"
+                        "rst_tx TEXT,"
+                        "rst_rx TEXT,"
                         "comment TEXT"
                         ")"))
                     || !query.exec(QStringLiteral(
-                        "INSERT INTO contacts (id, date, time, call, band, frequency, mode, submode, comment) "
-                        "SELECT id, date, COALESCE(NULLIF(time_off, ''), time_on), call, band, frequency, mode, submode, comment "
+                        "INSERT INTO contacts (id, date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, comment) "
+                        "SELECT id, date, COALESCE(NULLIF(time_off, ''), time_on), call, band, frequency, mode, submode, '', '', '', comment "
+                        "FROM contacts_old"))
+                    || !query.exec(QStringLiteral("DROP TABLE contacts_old"))) {
+                    statusBar()->showMessage(query.lastError().text());
+                    return false;
+                }
+            } else if (existingFields == QStringList{
+                    QStringLiteral("date"),
+                    QStringLiteral("time"),
+                    QStringLiteral("call"),
+                    QStringLiteral("band"),
+                    QStringLiteral("frequency"),
+                    QStringLiteral("mode"),
+                    QStringLiteral("submode"),
+                    QStringLiteral("comment")
+                }) {
+                if (!query.exec(QStringLiteral("ALTER TABLE contacts RENAME TO contacts_old"))
+                    || !query.exec(QStringLiteral(
+                        "CREATE TABLE contacts ("
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                        "date TEXT NOT NULL,"
+                        "time TEXT NOT NULL,"
+                        "call TEXT NOT NULL,"
+                        "band TEXT NOT NULL,"
+                        "frequency TEXT NOT NULL,"
+                        "mode TEXT NOT NULL,"
+                        "submode TEXT,"
+                        "grid TEXT,"
+                        "rst_tx TEXT,"
+                        "rst_rx TEXT,"
+                        "comment TEXT"
+                        ")"))
+                    || !query.exec(QStringLiteral(
+                        "INSERT INTO contacts (id, date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, comment) "
+                        "SELECT id, date, time, call, band, frequency, mode, submode, '', '', '', comment "
                         "FROM contacts_old"))
                     || !query.exec(QStringLiteral("DROP TABLE contacts_old"))) {
                     statusBar()->showMessage(query.lastError().text());
@@ -177,6 +220,9 @@ bool MainWindow::initializeDatabase()
             "frequency TEXT NOT NULL,"
             "mode TEXT NOT NULL,"
             "submode TEXT,"
+            "grid TEXT,"
+            "rst_tx TEXT,"
+            "rst_rx TEXT,"
             "comment TEXT"
             ")"))) {
         statusBar()->showMessage(query.lastError().text());
@@ -236,8 +282,8 @@ bool MainWindow::seedDatabase()
 
     QSqlQuery insertQuery(database);
     insertQuery.prepare(QStringLiteral(
-        "INSERT INTO contacts (date, time, call, band, frequency, mode, submode, comment) "
-        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :comment)"));
+        "INSERT INTO contacts (date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, comment) "
+        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :grid, :rst_tx, :rst_rx, :comment)"));
 
     for (const SeedContact &contact : kSeedContacts) {
         insertQuery.bindValue(QStringLiteral(":date"), QString::fromLatin1(contact.date));
@@ -247,6 +293,9 @@ bool MainWindow::seedDatabase()
         insertQuery.bindValue(QStringLiteral(":frequency"), QString::fromLatin1(contact.frequency));
         insertQuery.bindValue(QStringLiteral(":mode"), QString::fromLatin1(contact.mode));
         insertQuery.bindValue(QStringLiteral(":submode"), QString::fromLatin1(contact.submode));
+        insertQuery.bindValue(QStringLiteral(":grid"), QString::fromLatin1(contact.grid));
+        insertQuery.bindValue(QStringLiteral(":rst_tx"), QString::fromLatin1(contact.rstTx));
+        insertQuery.bindValue(QStringLiteral(":rst_rx"), QString::fromLatin1(contact.rstRx));
         insertQuery.bindValue(QStringLiteral(":comment"), QString::fromLatin1(contact.comment));
 
         if (!insertQuery.exec()) {
@@ -276,8 +325,8 @@ bool MainWindow::addLoggedContact(const UdpLoggedContact &contact)
 
     QSqlQuery insertQuery(database);
     insertQuery.prepare(QStringLiteral(
-        "INSERT INTO contacts (date, time, call, band, frequency, mode, submode, comment) "
-        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :comment)"));
+        "INSERT INTO contacts (date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, comment) "
+        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :grid, :rst_tx, :rst_rx, :comment)"));
     insertQuery.bindValue(QStringLiteral(":date"), contact.date.toString(Qt::ISODate));
     insertQuery.bindValue(QStringLiteral(":time"), contact.time.toString(QStringLiteral("HH:mm:ss")));
     insertQuery.bindValue(QStringLiteral(":call"), contact.call);
@@ -285,6 +334,9 @@ bool MainWindow::addLoggedContact(const UdpLoggedContact &contact)
     insertQuery.bindValue(QStringLiteral(":frequency"), contact.frequency);
     insertQuery.bindValue(QStringLiteral(":mode"), contact.mode);
     insertQuery.bindValue(QStringLiteral(":submode"), contact.submode);
+    insertQuery.bindValue(QStringLiteral(":grid"), contact.grid);
+    insertQuery.bindValue(QStringLiteral(":rst_tx"), contact.rstTx);
+    insertQuery.bindValue(QStringLiteral(":rst_rx"), contact.rstRx);
     insertQuery.bindValue(QStringLiteral(":comment"), contact.comment);
 
     if (!insertQuery.exec()) {
@@ -351,6 +403,9 @@ void MainWindow::setupModel()
     m_model->setHeaderData(m_model->fieldIndex("frequency"), Qt::Horizontal, "Frequency");
     m_model->setHeaderData(m_model->fieldIndex("mode"), Qt::Horizontal, "Mode");
     m_model->setHeaderData(m_model->fieldIndex("submode"), Qt::Horizontal, "Submode");
+    m_model->setHeaderData(m_model->fieldIndex("grid"), Qt::Horizontal, "Grid");
+    m_model->setHeaderData(m_model->fieldIndex("rst_tx"), Qt::Horizontal, "RST TX");
+    m_model->setHeaderData(m_model->fieldIndex("rst_rx"), Qt::Horizontal, "RST RX");
     m_model->setHeaderData(m_model->fieldIndex("comment"), Qt::Horizontal, "Comment");
 }
 

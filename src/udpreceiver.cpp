@@ -184,11 +184,11 @@ std::optional<UdpLoggedContact> decodeType5(QDataStream &stream, const QString &
     contact.frequency = frequencyFromHz(dialFreqHz);
     contact.mode = mode;
     contact.submode = submode;
+    contact.grid = grid;
+    contact.rstTx = reportSent.trimmed();
+    contact.rstRx = reportReceived.trimmed();
     contact.comment = joinCommentParts({
         comment,
-        grid.isEmpty() ? QString() : QStringLiteral("Grid: %1").arg(grid),
-        reportSent.isEmpty() ? QString() : QStringLiteral("RST sent: %1").arg(reportSent),
-        reportReceived.isEmpty() ? QString() : QStringLiteral("RST received: %1").arg(reportReceived),
         txPower.isEmpty() ? QString() : QStringLiteral("Power: %1").arg(txPower),
         name.isEmpty() ? QString() : QStringLiteral("Name: %1").arg(name)
     });
@@ -265,11 +265,11 @@ std::optional<UdpLoggedContact> decodeType6(QDataStream &stream, const QString &
     contact.frequency = frequencyFromHz(txFreqHz);
     contact.mode = mode;
     contact.submode = submode;
+    contact.grid = grid;
+    contact.rstTx = reportSent.trimmed();
+    contact.rstRx = reportReceived.trimmed();
     contact.comment = joinCommentParts({
         comment,
-        grid.isEmpty() ? QString() : QStringLiteral("Grid: %1").arg(grid),
-        reportSent.isEmpty() ? QString() : QStringLiteral("RST sent: %1").arg(reportSent),
-        reportReceived.isEmpty() ? QString() : QStringLiteral("RST received: %1").arg(reportReceived),
         txPower.isEmpty() ? QString() : QStringLiteral("Power: %1").arg(txPower),
         name.isEmpty() ? QString() : QStringLiteral("Name: %1").arg(name),
         operatorCall.isEmpty() ? QString() : QStringLiteral("Operator: %1").arg(operatorCall),

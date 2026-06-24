@@ -17,6 +17,9 @@ struct UdpLoggedContact
     QString frequency;
     QString mode;
     QString submode;
+    QString grid;
+    QString rstTx;
+    QString rstRx;
     QString comment;
 };
 
