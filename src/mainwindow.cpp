@@ -156,6 +156,21 @@ QString recordGrid(const AdifRecord &record)
         }
     }
 
+    for (auto it = record.cbegin(); it != record.cend(); ++it) {
+        if (!it.key().contains(QStringLiteral("GRID")) || it.key().startsWith(QStringLiteral("MY_"))) {
+            continue;
+        }
+
+        const QStringList candidates = it.value().split(QRegularExpression(QStringLiteral("[,;\\s]+")),
+                                                        Qt::SkipEmptyParts);
+        for (const QString &candidate : candidates) {
+            const QString grid = displayGrid(candidate);
+            if (!grid.isEmpty()) {
+                return grid;
+            }
+        }
+    }
+
     return QString();
 }
 
@@ -519,6 +534,7 @@ void MainWindow::importFromLotw()
     query.addQueryItem(QStringLiteral("password"), password);
     query.addQueryItem(QStringLiteral("qso_query"), QStringLiteral("1"));
     query.addQueryItem(QStringLiteral("qso_qsl"), QStringLiteral("yes"));
+    query.addQueryItem(QStringLiteral("qso_qsldetail"), QStringLiteral("yes"));
     query.addQueryItem(QStringLiteral("qso_qslsince"), qslSince);
     url.setQuery(query);
 
@@ -565,9 +581,12 @@ void MainWindow::importLotwData(const QByteArray &data)
 
     QSqlQuery duplicateQuery(database);
     duplicateQuery.prepare(QStringLiteral(
-        "SELECT 1 FROM contacts "
+        "SELECT id, grid FROM contacts "
         "WHERE date = :date AND time = :time AND UPPER(call) = UPPER(:call) "
         "AND band = :band AND mode = :mode LIMIT 1"));
+
+    QSqlQuery updateGridQuery(database);
+    updateGridQuery.prepare(QStringLiteral("UPDATE contacts SET grid = :grid WHERE id = :id"));
 
     QSqlQuery insertQuery(database);
     insertQuery.prepare(QStringLiteral(
@@ -579,6 +598,7 @@ void MainWindow::importLotwData(const QByteArray &data)
     int imported = 0;
     int duplicates = 0;
     int invalid = 0;
+    int gridsUpdated = 0;
 
     for (const AdifRecord &record : records) {
         const QString date = adifDate(record.value(QStringLiteral("QSO_DATE")));
@@ -602,6 +622,8 @@ void MainWindow::importLotwData(const QByteArray &data)
             continue;
         }
 
+        const QString grid = recordGrid(record);
+
         duplicateQuery.bindValue(QStringLiteral(":date"), date);
         duplicateQuery.bindValue(QStringLiteral(":time"), time);
         duplicateQuery.bindValue(QStringLiteral(":call"), call);
@@ -613,6 +635,17 @@ void MainWindow::importLotwData(const QByteArray &data)
             return;
         }
         if (duplicateQuery.next()) {
+            const QString existingGrid = duplicateQuery.value(1).toString().trimmed();
+            if (existingGrid.isEmpty() && !grid.isEmpty()) {
+                updateGridQuery.bindValue(QStringLiteral(":grid"), grid);
+                updateGridQuery.bindValue(QStringLiteral(":id"), duplicateQuery.value(0));
+                if (!updateGridQuery.exec()) {
+                    database.rollback();
+                    QMessageBox::warning(this, QStringLiteral("LoTW Import"), updateGridQuery.lastError().text());
+                    return;
+                }
+                ++gridsUpdated;
+            }
             ++duplicates;
             continue;
         }
@@ -634,7 +667,7 @@ void MainWindow::importLotwData(const QByteArray &data)
                               frequency.isEmpty() ? QStringLiteral("") : frequency);
         insertQuery.bindValue(QStringLiteral(":mode"), mode);
         insertQuery.bindValue(QStringLiteral(":submode"), submode);
-        insertQuery.bindValue(QStringLiteral(":grid"), recordGrid(record));
+        insertQuery.bindValue(QStringLiteral(":grid"), grid);
         insertQuery.bindValue(QStringLiteral(":rst_tx"), record.value(QStringLiteral("RST_SENT")).trimmed());
         insertQuery.bindValue(QStringLiteral(":rst_rx"), record.value(QStringLiteral("RST_RCVD")).trimmed());
         insertQuery.bindValue(QStringLiteral(":comment"), record.value(QStringLiteral("COMMENT")).trimmed());
@@ -658,9 +691,10 @@ void MainWindow::importLotwData(const QByteArray &data)
     QMessageBox::information(
         this,
         QStringLiteral("LoTW Import"),
-        QStringLiteral("Imported: %1\nDuplicates skipped: %2\nInvalid records skipped: %3")
+        QStringLiteral("Imported: %1\nDuplicates skipped: %2\nMissing grids updated: %3\nInvalid records skipped: %4")
             .arg(imported)
             .arg(duplicates)
+            .arg(gridsUpdated)
             .arg(invalid));
 }
 
