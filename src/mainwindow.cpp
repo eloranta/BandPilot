@@ -136,6 +136,29 @@ QString displayGrid(const QString &value)
     return pattern.match(grid).hasMatch() ? grid : QString();
 }
 
+QString recordGrid(const AdifRecord &record)
+{
+    const QStringList fields = {
+        QStringLiteral("GRIDSQUARE"),
+        QStringLiteral("VUCC_GRIDS"),
+        QStringLiteral("APP_LOTW_GRIDSQUARE"),
+        QStringLiteral("APP_LOTW_VUCC_GRIDS")
+    };
+
+    for (const QString &field : fields) {
+        const QStringList candidates = record.value(field).split(QRegularExpression(QStringLiteral("[,;\\s]+")),
+                                                                 Qt::SkipEmptyParts);
+        for (const QString &candidate : candidates) {
+            const QString grid = displayGrid(candidate);
+            if (!grid.isEmpty()) {
+                return grid;
+            }
+        }
+    }
+
+    return QString();
+}
+
 QString displayMode(const QString &value)
 {
     const QString mode = value.trimmed().toUpper();
@@ -564,7 +587,7 @@ void MainWindow::importLotwData(const QByteArray &data)
                               frequency.isEmpty() ? QStringLiteral("") : frequency);
         insertQuery.bindValue(QStringLiteral(":mode"), mode);
         insertQuery.bindValue(QStringLiteral(":submode"), submode);
-        insertQuery.bindValue(QStringLiteral(":grid"), displayGrid(record.value(QStringLiteral("GRIDSQUARE"))));
+        insertQuery.bindValue(QStringLiteral(":grid"), recordGrid(record));
         insertQuery.bindValue(QStringLiteral(":rst_tx"), record.value(QStringLiteral("RST_SENT")).trimmed());
         insertQuery.bindValue(QStringLiteral(":rst_rx"), record.value(QStringLiteral("RST_RCVD")).trimmed());
         insertQuery.bindValue(QStringLiteral(":comment"), record.value(QStringLiteral("COMMENT")).trimmed());
