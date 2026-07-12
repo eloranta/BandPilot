@@ -428,6 +428,53 @@ bool MainWindow::deleteSelectedContacts()
     return true;
 }
 
+void MainWindow::clearAllContacts()
+{
+    const QMessageBox::StandardButton answer = QMessageBox::warning(
+        this,
+        QStringLiteral("Clear Database"),
+        QStringLiteral("This will permanently delete all contacts from the database.\n\nContinue?"),
+        QMessageBox::Yes | QMessageBox::Cancel,
+        QMessageBox::Cancel);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    QSqlDatabase database = QSqlDatabase::database(kConnectionName);
+    if (!database.transaction()) {
+        QMessageBox::warning(this, QStringLiteral("Clear Database"), database.lastError().text());
+        return;
+    }
+
+    QSqlQuery countQuery(database);
+    if (!countQuery.exec(QStringLiteral("SELECT COUNT(*) FROM contacts")) || !countQuery.next()) {
+        database.rollback();
+        QMessageBox::warning(this, QStringLiteral("Clear Database"), countQuery.lastError().text());
+        return;
+    }
+
+    const int deletedCount = countQuery.value(0).toInt();
+    QSqlQuery deleteQuery(database);
+    if (!deleteQuery.exec(QStringLiteral("DELETE FROM contacts"))) {
+        database.rollback();
+        QMessageBox::warning(this, QStringLiteral("Clear Database"), deleteQuery.lastError().text());
+        return;
+    }
+
+    if (!database.commit()) {
+        database.rollback();
+        QMessageBox::warning(this, QStringLiteral("Clear Database"), database.lastError().text());
+        return;
+    }
+
+    m_model->select();
+    m_tableView->resizeColumnsToContents();
+    statusBar()->showMessage(QStringLiteral("Cleared %1 contact%2")
+                                 .arg(deletedCount)
+                                 .arg(deletedCount == 1 ? QString() : QStringLiteral("s")),
+                             5000);
+}
+
 void MainWindow::importFromLotw()
 {
     QDialog dialog(this);
@@ -644,6 +691,10 @@ void MainWindow::setupUi()
     QMenu *importMenu = fileMenu->addMenu(QStringLiteral("&Import from"));
     QAction *lotwAction = importMenu->addAction(QStringLiteral("&LoTW..."));
     connect(lotwAction, &QAction::triggered, this, &MainWindow::importFromLotw);
+
+    QMenu *databaseMenu = menuBar()->addMenu(QStringLiteral("&Database"));
+    QAction *clearAllAction = databaseMenu->addAction(QStringLiteral("&Clear All"));
+    connect(clearAllAction, &QAction::triggered, this, &MainWindow::clearAllContacts);
 
     m_tableView = new QTableView(this);
     m_tableView->setModel(m_model);

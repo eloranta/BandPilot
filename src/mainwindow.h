@@ -24,6 +24,7 @@ private:
     bool initializeDatabase();
     bool addLoggedContact(const UdpLoggedContact &contact);
     bool deleteSelectedContacts();
+    void clearAllContacts();
     void importFromLotw();
     void importLotwData(const QByteArray &data);
     void setupModel();
