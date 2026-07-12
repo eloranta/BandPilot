@@ -1,13 +1,25 @@
 #include "mainwindow.h"
 #include "udpreceiver.h"
 
+#include <QAction>
 #include <QCoreApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QEvent>
+#include <QFormLayout>
+#include <QHash>
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
+#include <QLineEdit>
+#include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QRegularExpression>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -16,6 +28,7 @@
 #include <QStatusBar>
 #include <QStringList>
 #include <QTableView>
+#include <QUrlQuery>
 
 #include <algorithm>
 
@@ -23,31 +36,6 @@ namespace {
 
 constexpr const char *kConnectionName = "bandpilot";
 constexpr const char *kTableName = "contacts";
-constexpr const char *kSeedVersion = "4";
-
-struct SeedContact
-{
-    const char *date;
-    const char *time;
-    const char *call;
-    const char *band;
-    const char *frequency;
-    const char *mode;
-    const char *submode;
-    const char *grid;
-    const char *rstTx;
-    const char *rstRx;
-    const char *comment;
-};
-
-const SeedContact kSeedContacts[] = {
-    {"2026-06-23", "09:18", "OH2ABC", "20 m", "14.225", "Phone", "USB", "", "", "", "Strong signal from Helsinki"},
-    {"2026-06-23", "10:05", "K1XYZ", "15 m", "21.035", "CW", "", "", "", "", "Quick morning contact"},
-    {"2026-06-23", "11:39", "JA7QSO", "10 m", "28.074", "Data", "FT8", "", "", "", "Good decode on short opening"},
-    {"2026-06-23", "13:26", "DL5HAM", "40 m", "7.145", "Phone", "LSB", "", "", "", "Portable station"},
-    {"2026-06-23", "15:50", "VK3LOG", "17 m", "18.104", "Data", "FT4", "", "", "", "Long path contact"},
-    {"2026-06-23", "18:17", "AO-91", "2 m", "145.960", "Sat", "FM", "", "", "", "Satellite pass contact"}
-};
 
 const QStringList kContactFields = {
     QStringLiteral("date"),
@@ -62,6 +50,121 @@ const QStringList kContactFields = {
     QStringLiteral("rst_rx"),
     QStringLiteral("comment")
 };
+
+using AdifRecord = QHash<QString, QString>;
+
+QList<AdifRecord> parseAdif(const QByteArray &data)
+{
+    QList<AdifRecord> records;
+    AdifRecord record;
+    qsizetype position = 0;
+
+    while (position < data.size()) {
+        const qsizetype tagStart = data.indexOf('<', position);
+        if (tagStart < 0) {
+            break;
+        }
+
+        const qsizetype tagEnd = data.indexOf('>', tagStart + 1);
+        if (tagEnd < 0) {
+            break;
+        }
+
+        const QByteArray descriptor = data.mid(tagStart + 1, tagEnd - tagStart - 1).trimmed();
+        const QList<QByteArray> parts = descriptor.split(':');
+        const QString fieldName = QString::fromLatin1(parts.value(0)).trimmed().toUpper();
+        position = tagEnd + 1;
+
+        if (fieldName == QStringLiteral("EOH")) {
+            record.clear();
+            continue;
+        }
+        if (fieldName == QStringLiteral("EOR")) {
+            if (!record.isEmpty()) {
+                records.append(record);
+                record.clear();
+            }
+            continue;
+        }
+        if (parts.size() < 2) {
+            continue;
+        }
+
+        bool lengthOk = false;
+        const qsizetype valueLength = parts.at(1).trimmed().toLongLong(&lengthOk);
+        if (!lengthOk || valueLength < 0 || position + valueLength > data.size()) {
+            break;
+        }
+
+        record.insert(fieldName, QString::fromUtf8(data.mid(position, valueLength)).trimmed());
+        position += valueLength;
+    }
+
+    return records;
+}
+
+QString adifDate(const QString &value)
+{
+    const QDate date = QDate::fromString(value.trimmed(), QStringLiteral("yyyyMMdd"));
+    return date.isValid() ? date.toString(Qt::ISODate) : QString();
+}
+
+QString adifTime(const QString &value)
+{
+    QString digits = value.trimmed();
+    if (digits.size() == 4) {
+        digits.append(QStringLiteral("00"));
+    }
+    const QTime time = QTime::fromString(digits, QStringLiteral("HHmmss"));
+    return time.isValid() ? time.toString(QStringLiteral("HH:mm:ss")) : QString();
+}
+
+QString displayBand(const QString &value)
+{
+    static const QRegularExpression pattern(QStringLiteral("^(\\d+(?:\\.\\d+)?)M$"),
+                                            QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch match = pattern.match(value.trimmed());
+    return match.hasMatch() ? match.captured(1) + QStringLiteral(" m") : value.trimmed();
+}
+
+QString displayGrid(const QString &value)
+{
+    static const QRegularExpression pattern(
+        QStringLiteral("^[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)?$"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QString grid = value.trimmed().toUpper();
+    return pattern.match(grid).hasMatch() ? grid : QString();
+}
+
+QString displayMode(const QString &value)
+{
+    const QString mode = value.trimmed().toUpper();
+    if (mode == QStringLiteral("CW")) {
+        return QStringLiteral("CW");
+    }
+    if (mode == QStringLiteral("SSB")
+        || mode == QStringLiteral("USB")
+        || mode == QStringLiteral("LSB")
+        || mode == QStringLiteral("AM")
+        || mode == QStringLiteral("FM")) {
+        return QStringLiteral("Phone");
+    }
+    if (mode.contains(QStringLiteral("SAT"))) {
+        return QStringLiteral("Sat");
+    }
+    return QStringLiteral("Data");
+}
+
+QString lotwResponseMessage(const QByteArray &data)
+{
+    QString message = QString::fromUtf8(data);
+    message.remove(QRegularExpression(QStringLiteral("<[^>]*>")));
+    message = message.simplified();
+    if (message.size() > 800) {
+        message = message.left(800) + QStringLiteral("...");
+    }
+    return message;
+}
 
 } // namespace
 
@@ -79,6 +182,7 @@ MainWindow::MainWindow(QWidget *parent)
     setupModel();
     setupUi();
 
+    m_networkManager = new QNetworkAccessManager(this);
     m_udpReceiver = new UdpReceiver(this);
     connect(m_udpReceiver, &UdpReceiver::loggedContactReceived, this, [this](const UdpLoggedContact &contact) {
         if (addLoggedContact(contact)) {
@@ -229,93 +333,6 @@ bool MainWindow::initializeDatabase()
         return false;
     }
 
-    if (!query.exec(QStringLiteral(
-            "CREATE TABLE IF NOT EXISTS app_metadata ("
-            "key TEXT PRIMARY KEY,"
-            "value TEXT NOT NULL"
-            ")"))) {
-        statusBar()->showMessage(query.lastError().text());
-        return false;
-    }
-
-    return seedDatabase();
-}
-
-bool MainWindow::seedDatabase()
-{
-    QSqlDatabase database = QSqlDatabase::database(kConnectionName);
-
-    QSqlQuery metadataQuery(database);
-    metadataQuery.prepare(QStringLiteral("SELECT value FROM app_metadata WHERE key = :key"));
-    metadataQuery.bindValue(QStringLiteral(":key"), QStringLiteral("seed_version"));
-
-    const bool hasSeedVersion = metadataQuery.exec() && metadataQuery.next();
-    const QString seedVersion = hasSeedVersion ? metadataQuery.value(0).toString() : QString();
-
-    QSqlQuery countQuery(database);
-    if (!countQuery.exec(QStringLiteral("SELECT COUNT(*) FROM contacts")) || !countQuery.next()) {
-        statusBar()->showMessage(countQuery.lastError().text());
-        return false;
-    }
-
-    if (countQuery.value(0).toInt() > 0) {
-        if (seedVersion != QString::fromLatin1(kSeedVersion)) {
-            QSqlQuery versionQuery(database);
-            versionQuery.prepare(QStringLiteral(
-                "INSERT OR REPLACE INTO app_metadata (key, value) "
-                "VALUES (:key, :value)"));
-            versionQuery.bindValue(QStringLiteral(":key"), QStringLiteral("seed_version"));
-            versionQuery.bindValue(QStringLiteral(":value"), QString::fromLatin1(kSeedVersion));
-            if (!versionQuery.exec()) {
-                statusBar()->showMessage(versionQuery.lastError().text());
-                return false;
-            }
-        }
-        return true;
-    }
-
-    QSqlQuery clearQuery(database);
-    if (!clearQuery.exec(QStringLiteral("DELETE FROM contacts"))) {
-        statusBar()->showMessage(clearQuery.lastError().text());
-        return false;
-    }
-
-    QSqlQuery insertQuery(database);
-    insertQuery.prepare(QStringLiteral(
-        "INSERT INTO contacts (date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, comment) "
-        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :grid, :rst_tx, :rst_rx, :comment)"));
-
-    for (const SeedContact &contact : kSeedContacts) {
-        insertQuery.bindValue(QStringLiteral(":date"), QString::fromLatin1(contact.date));
-        insertQuery.bindValue(QStringLiteral(":time"), QString::fromLatin1(contact.time));
-        insertQuery.bindValue(QStringLiteral(":call"), QString::fromLatin1(contact.call));
-        insertQuery.bindValue(QStringLiteral(":band"), QString::fromLatin1(contact.band));
-        insertQuery.bindValue(QStringLiteral(":frequency"), QString::fromLatin1(contact.frequency));
-        insertQuery.bindValue(QStringLiteral(":mode"), QString::fromLatin1(contact.mode));
-        insertQuery.bindValue(QStringLiteral(":submode"), QString::fromLatin1(contact.submode));
-        insertQuery.bindValue(QStringLiteral(":grid"), QString::fromLatin1(contact.grid));
-        insertQuery.bindValue(QStringLiteral(":rst_tx"), QString::fromLatin1(contact.rstTx));
-        insertQuery.bindValue(QStringLiteral(":rst_rx"), QString::fromLatin1(contact.rstRx));
-        insertQuery.bindValue(QStringLiteral(":comment"), QString::fromLatin1(contact.comment));
-
-        if (!insertQuery.exec()) {
-            statusBar()->showMessage(insertQuery.lastError().text());
-            return false;
-        }
-    }
-
-    QSqlQuery versionQuery(database);
-    versionQuery.prepare(QStringLiteral(
-        "INSERT OR REPLACE INTO app_metadata (key, value) "
-        "VALUES (:key, :value)"));
-    versionQuery.bindValue(QStringLiteral(":key"), QStringLiteral("seed_version"));
-    versionQuery.bindValue(QStringLiteral(":value"), QString::fromLatin1(kSeedVersion));
-
-    if (!versionQuery.exec()) {
-        statusBar()->showMessage(versionQuery.lastError().text());
-        return false;
-    }
-
     return true;
 }
 
@@ -388,6 +405,195 @@ bool MainWindow::deleteSelectedContacts()
     return true;
 }
 
+void MainWindow::importFromLotw()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Import from LoTW"));
+
+    QLineEdit loginEdit(&dialog);
+    QLineEdit passwordEdit(&dialog);
+    QLineEdit qslSinceEdit(QStringLiteral("2026-01-01"), &dialog);
+    passwordEdit.setEchoMode(QLineEdit::Password);
+
+    QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(&buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    QFormLayout layout(&dialog);
+    layout.addRow(QStringLiteral("Login:"), &loginEdit);
+    layout.addRow(QStringLiteral("Password:"), &passwordEdit);
+    layout.addRow(QStringLiteral("QSLs since:"), &qslSinceEdit);
+    layout.addRow(&buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const QString login = loginEdit.text().trimmed();
+    const QString password = passwordEdit.text();
+    const QString qslSince = qslSinceEdit.text().trimmed();
+    if (login.isEmpty() || password.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("LoTW Import"),
+                             QStringLiteral("Login and password are required."));
+        return;
+    }
+    if (!QDate::fromString(qslSince, Qt::ISODate).isValid()) {
+        QMessageBox::warning(this, QStringLiteral("LoTW Import"),
+                             QStringLiteral("QSLs since must use YYYY-MM-DD format."));
+        return;
+    }
+
+    QUrl url(QStringLiteral("https://lotw.arrl.org/lotwuser/lotwreport.adi"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("login"), login);
+    query.addQueryItem(QStringLiteral("password"), password);
+    query.addQueryItem(QStringLiteral("qso_query"), QStringLiteral("1"));
+    query.addQueryItem(QStringLiteral("qso_qsl"), QStringLiteral("yes"));
+    query.addQueryItem(QStringLiteral("qso_qslsince"), qslSince);
+    url.setQuery(query);
+
+    QNetworkRequest request(url);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    QNetworkReply *reply = m_networkManager->get(request);
+    statusBar()->showMessage(QStringLiteral("Downloading LoTW report..."));
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const QByteArray data = reply->readAll();
+        const QNetworkReply::NetworkError error = reply->error();
+        const QString errorText = reply->errorString();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError) {
+            statusBar()->showMessage(QStringLiteral("LoTW download failed"), 5000);
+            QMessageBox::warning(this, QStringLiteral("LoTW Import"), errorText);
+            return;
+        }
+
+        importLotwData(data);
+    });
+}
+
+void MainWindow::importLotwData(const QByteArray &data)
+{
+    const QList<AdifRecord> records = parseAdif(data);
+    if (records.isEmpty()) {
+        const QString serverMessage = lotwResponseMessage(data);
+        QMessageBox::warning(this, QStringLiteral("LoTW Import"),
+                             serverMessage.isEmpty()
+                                 ? QStringLiteral("LoTW returned an empty response.")
+                                 : QStringLiteral("LoTW returned no QSO records:\n\n%1")
+                                       .arg(serverMessage));
+        return;
+    }
+
+    QSqlDatabase database = QSqlDatabase::database(kConnectionName);
+    if (!database.transaction()) {
+        QMessageBox::warning(this, QStringLiteral("LoTW Import"), database.lastError().text());
+        return;
+    }
+
+    QSqlQuery duplicateQuery(database);
+    duplicateQuery.prepare(QStringLiteral(
+        "SELECT 1 FROM contacts "
+        "WHERE date = :date AND time = :time AND UPPER(call) = UPPER(:call) "
+        "AND band = :band AND mode = :mode LIMIT 1"));
+
+    QSqlQuery insertQuery(database);
+    insertQuery.prepare(QStringLiteral(
+        "INSERT INTO contacts "
+        "(date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, comment) "
+        "VALUES "
+        "(:date, :time, :call, :band, :frequency, :mode, :submode, :grid, :rst_tx, :rst_rx, :comment)"));
+
+    int imported = 0;
+    int duplicates = 0;
+    int invalid = 0;
+
+    for (const AdifRecord &record : records) {
+        const QString date = adifDate(record.value(QStringLiteral("QSO_DATE")));
+        QString time = adifTime(record.value(QStringLiteral("TIME_ON")));
+        if (time.isEmpty() && record.contains(QStringLiteral("APP_LOTW_DXCC_PROCESSED_DTG"))) {
+            time = QStringLiteral("00:00:00");
+        }
+        const QString call = record.value(QStringLiteral("CALL")).trimmed().toUpper();
+        const QString band = displayBand(record.value(QStringLiteral("BAND")));
+        QString adifMode = record.value(QStringLiteral("MODE")).trimmed().toUpper();
+        if (adifMode.isEmpty()) {
+            adifMode = record.value(QStringLiteral("APP_LOTW_MODE")).trimmed().toUpper();
+        }
+        if (adifMode.isEmpty()) {
+            adifMode = record.value(QStringLiteral("APP_LOTW_MODEGROUP")).trimmed().toUpper();
+        }
+        const QString mode = displayMode(adifMode);
+
+        if (date.isEmpty() || time.isEmpty() || call.isEmpty() || band.isEmpty() || adifMode.isEmpty()) {
+            ++invalid;
+            continue;
+        }
+
+        duplicateQuery.bindValue(QStringLiteral(":date"), date);
+        duplicateQuery.bindValue(QStringLiteral(":time"), time);
+        duplicateQuery.bindValue(QStringLiteral(":call"), call);
+        duplicateQuery.bindValue(QStringLiteral(":band"), band);
+        duplicateQuery.bindValue(QStringLiteral(":mode"), mode);
+        if (!duplicateQuery.exec()) {
+            database.rollback();
+            QMessageBox::warning(this, QStringLiteral("LoTW Import"), duplicateQuery.lastError().text());
+            return;
+        }
+        if (duplicateQuery.next()) {
+            ++duplicates;
+            continue;
+        }
+
+        QString submode = record.value(QStringLiteral("SUBMODE")).trimmed().toUpper();
+        if (submode.isEmpty()) {
+            submode = record.value(QStringLiteral("APP_LOTW_MODE")).trimmed().toUpper();
+        }
+        if (submode.isEmpty() && mode != adifMode) {
+            submode = adifMode;
+        }
+
+        insertQuery.bindValue(QStringLiteral(":date"), date);
+        insertQuery.bindValue(QStringLiteral(":time"), time);
+        insertQuery.bindValue(QStringLiteral(":call"), call);
+        insertQuery.bindValue(QStringLiteral(":band"), band);
+        const QString frequency = record.value(QStringLiteral("FREQ")).trimmed();
+        insertQuery.bindValue(QStringLiteral(":frequency"),
+                              frequency.isEmpty() ? QStringLiteral("") : frequency);
+        insertQuery.bindValue(QStringLiteral(":mode"), mode);
+        insertQuery.bindValue(QStringLiteral(":submode"), submode);
+        insertQuery.bindValue(QStringLiteral(":grid"), displayGrid(record.value(QStringLiteral("GRIDSQUARE"))));
+        insertQuery.bindValue(QStringLiteral(":rst_tx"), record.value(QStringLiteral("RST_SENT")).trimmed());
+        insertQuery.bindValue(QStringLiteral(":rst_rx"), record.value(QStringLiteral("RST_RCVD")).trimmed());
+        insertQuery.bindValue(QStringLiteral(":comment"), record.value(QStringLiteral("COMMENT")).trimmed());
+
+        if (!insertQuery.exec()) {
+            database.rollback();
+            QMessageBox::warning(this, QStringLiteral("LoTW Import"), insertQuery.lastError().text());
+            return;
+        }
+        ++imported;
+    }
+
+    if (!database.commit()) {
+        database.rollback();
+        QMessageBox::warning(this, QStringLiteral("LoTW Import"), database.lastError().text());
+        return;
+    }
+
+    m_model->select();
+    m_tableView->resizeColumnsToContents();
+    QMessageBox::information(
+        this,
+        QStringLiteral("LoTW Import"),
+        QStringLiteral("Imported: %1\nDuplicates skipped: %2\nInvalid records skipped: %3")
+            .arg(imported)
+            .arg(duplicates)
+            .arg(invalid));
+}
+
 void MainWindow::setupModel()
 {
     m_model = new QSqlTableModel(this, QSqlDatabase::database(kConnectionName));
@@ -411,6 +617,11 @@ void MainWindow::setupModel()
 
 void MainWindow::setupUi()
 {
+    QMenu *fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
+    QMenu *importMenu = fileMenu->addMenu(QStringLiteral("&Import from"));
+    QAction *lotwAction = importMenu->addAction(QStringLiteral("&LoTW..."));
+    connect(lotwAction, &QAction::triggered, this, &MainWindow::importFromLotw);
+
     m_tableView = new QTableView(this);
     m_tableView->setModel(m_model);
     m_tableView->setAlternatingRowColors(true);
