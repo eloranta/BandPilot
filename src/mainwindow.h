@@ -25,6 +25,8 @@ private:
     bool addLoggedContact(const UdpLoggedContact &contact);
     bool deleteSelectedContacts();
     void clearAllContacts();
+    void configureLotwSettings();
+    void downloadLotwReport(const QString &login, const QString &password, const QString &qslSince, bool usePost);
     void importFromLotw();
     void importLotwData(const QByteArray &data);
     void setupModel();

@@ -20,6 +20,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -36,6 +37,9 @@ namespace {
 
 constexpr const char *kConnectionName = "bandpilot";
 constexpr const char *kTableName = "contacts";
+constexpr const char *kLotwUsernameKey = "lotw/username";
+constexpr const char *kLotwPasswordKey = "lotw/password";
+constexpr const char *kObfuscationKey = "BandPilotLoTW";
 
 const QStringList kContactFields = {
     QStringLiteral("date"),
@@ -52,6 +56,44 @@ const QStringList kContactFields = {
 };
 
 using AdifRecord = QHash<QString, QString>;
+
+QString obfuscatePassword(const QString &password)
+{
+    QByteArray data = password.toUtf8();
+    const QByteArray key(kObfuscationKey);
+    for (qsizetype i = 0; i < data.size(); ++i) {
+        data[i] = data.at(i) ^ key.at(i % key.size());
+    }
+    return QString::fromLatin1(data.toBase64());
+}
+
+QString deobfuscatePassword(const QString &storedPassword)
+{
+    QByteArray data = QByteArray::fromBase64(storedPassword.toLatin1());
+    const QByteArray key(kObfuscationKey);
+    for (qsizetype i = 0; i < data.size(); ++i) {
+        data[i] = data.at(i) ^ key.at(i % key.size());
+    }
+    return QString::fromUtf8(data);
+}
+
+QString lotwUsername()
+{
+    return QSettings().value(QString::fromLatin1(kLotwUsernameKey)).toString();
+}
+
+QString lotwPassword()
+{
+    const QString storedPassword = QSettings().value(QString::fromLatin1(kLotwPasswordKey)).toString();
+    return storedPassword.isEmpty() ? QString() : deobfuscatePassword(storedPassword);
+}
+
+void saveLotwCredentials(const QString &username, const QString &password)
+{
+    QSettings settings;
+    settings.setValue(QString::fromLatin1(kLotwUsernameKey), username.trimmed());
+    settings.setValue(QString::fromLatin1(kLotwPasswordKey), obfuscatePassword(password.trimmed()));
+}
 
 QList<AdifRecord> parseAdif(const QByteArray &data)
 {
@@ -202,6 +244,36 @@ QString lotwResponseMessage(const QByteArray &data)
         message = message.left(800) + QStringLiteral("...");
     }
     return message;
+}
+
+QString lotwResponseError(const QByteArray &data)
+{
+    const QString response = QString::fromUtf8(data);
+    const QString plainText = lotwResponseMessage(data);
+
+    if (plainText.contains(QStringLiteral("Username/password incorrect"), Qt::CaseInsensitive)
+        || plainText.contains(QStringLiteral("Log On"), Qt::CaseInsensitive)
+        || plainText.contains(QStringLiteral("Username:"), Qt::CaseInsensitive)) {
+        return QStringLiteral("LoTW rejected the saved username or password. Update them in Settings -> LoTW.");
+    }
+
+    if (response.contains(QStringLiteral("<html"), Qt::CaseInsensitive)
+        || response.contains(QStringLiteral("<!doctype html"), Qt::CaseInsensitive)) {
+        return plainText.isEmpty()
+                   ? QStringLiteral("LoTW returned an HTML page instead of an ADIF report.")
+                   : QStringLiteral("LoTW returned an HTML page instead of an ADIF report:\n\n%1")
+                         .arg(plainText);
+    }
+
+    return QString();
+}
+
+bool lotwCredentialsRejected(const QByteArray &data)
+{
+    const QString plainText = lotwResponseMessage(data);
+    return plainText.contains(QStringLiteral("Username/password incorrect"), Qt::CaseInsensitive)
+        || plainText.contains(QStringLiteral("Log On"), Qt::CaseInsensitive)
+        || plainText.contains(QStringLiteral("Username:"), Qt::CaseInsensitive);
 }
 
 } // namespace
@@ -490,14 +562,13 @@ void MainWindow::clearAllContacts()
                              5000);
 }
 
-void MainWindow::importFromLotw()
+void MainWindow::configureLotwSettings()
 {
     QDialog dialog(this);
-    dialog.setWindowTitle(QStringLiteral("Import from LoTW"));
+    dialog.setWindowTitle(QStringLiteral("LoTW Settings"));
 
-    QLineEdit loginEdit(&dialog);
-    QLineEdit passwordEdit(&dialog);
-    QLineEdit qslSinceEdit(QStringLiteral("2026-01-01"), &dialog);
+    QLineEdit usernameEdit(lotwUsername(), &dialog);
+    QLineEdit passwordEdit(lotwPassword(), &dialog);
     passwordEdit.setEchoMode(QLineEdit::Password);
 
     QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
@@ -505,29 +576,31 @@ void MainWindow::importFromLotw()
     connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
 
     QFormLayout layout(&dialog);
-    layout.addRow(QStringLiteral("Login:"), &loginEdit);
-    layout.addRow(QStringLiteral("Password:"), &passwordEdit);
-    layout.addRow(QStringLiteral("QSLs since:"), &qslSinceEdit);
+    layout.addRow(QStringLiteral("LoTW username:"), &usernameEdit);
+    layout.addRow(QStringLiteral("LoTW password:"), &passwordEdit);
     layout.addRow(&buttons);
 
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
 
-    const QString login = loginEdit.text().trimmed();
-    const QString password = passwordEdit.text();
-    const QString qslSince = qslSinceEdit.text().trimmed();
-    if (login.isEmpty() || password.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("LoTW Import"),
-                             QStringLiteral("Login and password are required."));
-        return;
-    }
-    if (!QDate::fromString(qslSince, Qt::ISODate).isValid()) {
-        QMessageBox::warning(this, QStringLiteral("LoTW Import"),
-                             QStringLiteral("QSLs since must use YYYY-MM-DD format."));
+    const QString username = usernameEdit.text().trimmed();
+    const QString password = passwordEdit.text().trimmed();
+    if (username.isEmpty() || password.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("LoTW Settings"),
+                             QStringLiteral("Username and password are required."));
         return;
     }
 
+    saveLotwCredentials(username, password);
+    statusBar()->showMessage(QStringLiteral("LoTW settings saved"), 5000);
+}
+
+void MainWindow::downloadLotwReport(const QString &login,
+                                    const QString &password,
+                                    const QString &qslSince,
+                                    bool usePost)
+{
     QUrl url(QStringLiteral("https://lotw.arrl.org/lotwuser/lotwreport.adi"));
     QUrlQuery query;
     query.addQueryItem(QStringLiteral("login"), login);
@@ -536,15 +609,28 @@ void MainWindow::importFromLotw()
     query.addQueryItem(QStringLiteral("qso_qsl"), QStringLiteral("yes"));
     query.addQueryItem(QStringLiteral("qso_qsldetail"), QStringLiteral("yes"));
     query.addQueryItem(QStringLiteral("qso_qslsince"), qslSince);
-    url.setQuery(query);
 
     QNetworkRequest request(url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
-    QNetworkReply *reply = m_networkManager->get(request);
-    statusBar()->showMessage(QStringLiteral("Downloading LoTW report..."));
+    request.setRawHeader("User-Agent", "BandPilot");
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    QNetworkReply *reply = nullptr;
+    if (usePost) {
+        request.setHeader(QNetworkRequest::ContentTypeHeader,
+                          QStringLiteral("application/x-www-form-urlencoded"));
+        reply = m_networkManager->post(request, query.toString(QUrl::FullyEncoded).toUtf8());
+    } else {
+        url.setQuery(query);
+        request.setUrl(url);
+        reply = m_networkManager->get(request);
+    }
+
+    statusBar()->showMessage(usePost
+                                 ? QStringLiteral("Retrying LoTW report download...")
+                                 : QStringLiteral("Downloading LoTW report..."));
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, login, password, qslSince, usePost]() {
         const QByteArray data = reply->readAll();
         const QNetworkReply::NetworkError error = reply->error();
         const QString errorText = reply->errorString();
@@ -556,12 +642,64 @@ void MainWindow::importFromLotw()
             return;
         }
 
+        if (!usePost && lotwCredentialsRejected(data)) {
+            downloadLotwReport(login, password, qslSince, true);
+            return;
+        }
+
         importLotwData(data);
     });
 }
 
+void MainWindow::importFromLotw()
+{
+    const QString login = lotwUsername().trimmed();
+    const QString password = lotwPassword();
+    if (login.isEmpty() || password.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("LoTW Import"),
+                             QStringLiteral("Configure LoTW username and password in Settings first."));
+        configureLotwSettings();
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Import from LoTW"));
+
+    QLineEdit qslSinceEdit(QStringLiteral("2026-01-01"), &dialog);
+
+    QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(&buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    QFormLayout layout(&dialog);
+    layout.addRow(QStringLiteral("QSLs since:"), &qslSinceEdit);
+    layout.addRow(&buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const QString qslSince = qslSinceEdit.text().trimmed();
+    if (!QDate::fromString(qslSince, Qt::ISODate).isValid()) {
+        QMessageBox::warning(this, QStringLiteral("LoTW Import"),
+                             QStringLiteral("QSLs since must use YYYY-MM-DD format."));
+        return;
+    }
+
+    downloadLotwReport(login, password, qslSince, false);
+}
+
 void MainWindow::importLotwData(const QByteArray &data)
 {
+    const QString responseError = lotwResponseError(data);
+    if (!responseError.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("LoTW Import"), responseError);
+        if (responseError.contains(QStringLiteral("username or password"), Qt::CaseInsensitive)) {
+            configureLotwSettings();
+        }
+        return;
+    }
+
     const QList<AdifRecord> records = parseAdif(data);
     if (records.isEmpty()) {
         const QString serverMessage = lotwResponseMessage(data);
@@ -729,6 +867,10 @@ void MainWindow::setupUi()
     QMenu *databaseMenu = menuBar()->addMenu(QStringLiteral("&Database"));
     QAction *clearAllAction = databaseMenu->addAction(QStringLiteral("&Clear All"));
     connect(clearAllAction, &QAction::triggered, this, &MainWindow::clearAllContacts);
+
+    QMenu *settingsMenu = menuBar()->addMenu(QStringLiteral("&Settings"));
+    QAction *lotwSettingsAction = settingsMenu->addAction(QStringLiteral("&LoTW..."));
+    connect(lotwSettingsAction, &QAction::triggered, this, &MainWindow::configureLotwSettings);
 
     m_tableView = new QTableView(this);
     m_tableView->setModel(m_model);
