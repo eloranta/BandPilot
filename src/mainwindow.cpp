@@ -3,6 +3,7 @@
 
 #include <QAction>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -30,6 +31,7 @@
 #include <QStringList>
 #include <QTableView>
 #include <QUrlQuery>
+#include <QVariant>
 
 #include <algorithm>
 
@@ -52,6 +54,7 @@ const QStringList kContactFields = {
     QStringLiteral("grid"),
     QStringLiteral("rst_tx"),
     QStringLiteral("rst_rx"),
+    QStringLiteral("qsl"),
     QStringLiteral("comment")
 };
 
@@ -235,6 +238,34 @@ QString displayMode(const QString &value)
     return QStringLiteral("Data");
 }
 
+QString displayQslStatus(const AdifRecord &record)
+{
+    QString status = record.value(QStringLiteral("LOTW_QSL_RCVD")).trimmed().toUpper();
+    if (status.isEmpty()) {
+        status = record.value(QStringLiteral("APP_LOTW_QSL_RCVD")).trimmed().toUpper();
+    }
+    if (status.isEmpty()) {
+        status = record.value(QStringLiteral("QSL_RCVD")).trimmed().toUpper();
+    }
+
+    if (status == QStringLiteral("Y")) {
+        return QStringLiteral("C");
+    }
+    if (status == QStringLiteral("N") || status.isEmpty()) {
+        return QString();
+    }
+    if (status == QStringLiteral("R")) {
+        return QStringLiteral("Requested");
+    }
+    if (status == QStringLiteral("I")) {
+        return QStringLiteral("Ignored");
+    }
+    if (status == QStringLiteral("V")) {
+        return QStringLiteral("V");
+    }
+    return status;
+}
+
 QString lotwResponseMessage(const QByteArray &data)
 {
     QString message = QString::fromUtf8(data);
@@ -373,11 +404,12 @@ bool MainWindow::initializeDatabase()
                         "grid TEXT,"
                         "rst_tx TEXT,"
                         "rst_rx TEXT,"
+                        "qsl TEXT,"
                         "comment TEXT"
                         ")"))
                     || !query.exec(QStringLiteral(
-                        "INSERT INTO contacts (id, date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, comment) "
-                        "SELECT id, date, COALESCE(NULLIF(time_off, ''), time_on), call, band, frequency, mode, submode, '', '', '', comment "
+                        "INSERT INTO contacts (id, date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, qsl, comment) "
+                        "SELECT id, date, COALESCE(NULLIF(time_off, ''), time_on), call, band, frequency, mode, submode, '', '', '', '', comment "
                         "FROM contacts_old"))
                     || !query.exec(QStringLiteral("DROP TABLE contacts_old"))) {
                     statusBar()->showMessage(query.lastError().text());
@@ -407,11 +439,50 @@ bool MainWindow::initializeDatabase()
                         "grid TEXT,"
                         "rst_tx TEXT,"
                         "rst_rx TEXT,"
+                        "qsl TEXT,"
                         "comment TEXT"
                         ")"))
                     || !query.exec(QStringLiteral(
-                        "INSERT INTO contacts (id, date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, comment) "
-                        "SELECT id, date, time, call, band, frequency, mode, submode, '', '', '', comment "
+                        "INSERT INTO contacts (id, date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, qsl, comment) "
+                        "SELECT id, date, time, call, band, frequency, mode, submode, '', '', '', '', comment "
+                        "FROM contacts_old"))
+                    || !query.exec(QStringLiteral("DROP TABLE contacts_old"))) {
+                    statusBar()->showMessage(query.lastError().text());
+                    return false;
+                }
+            } else if (existingFields == QStringList{
+                    QStringLiteral("date"),
+                    QStringLiteral("time"),
+                    QStringLiteral("call"),
+                    QStringLiteral("band"),
+                    QStringLiteral("frequency"),
+                    QStringLiteral("mode"),
+                    QStringLiteral("submode"),
+                    QStringLiteral("grid"),
+                    QStringLiteral("rst_tx"),
+                    QStringLiteral("rst_rx"),
+                    QStringLiteral("comment")
+                }) {
+                if (!query.exec(QStringLiteral("ALTER TABLE contacts RENAME TO contacts_old"))
+                    || !query.exec(QStringLiteral(
+                        "CREATE TABLE contacts ("
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                        "date TEXT NOT NULL,"
+                        "time TEXT NOT NULL,"
+                        "call TEXT NOT NULL,"
+                        "band TEXT NOT NULL,"
+                        "frequency TEXT NOT NULL,"
+                        "mode TEXT NOT NULL,"
+                        "submode TEXT,"
+                        "grid TEXT,"
+                        "rst_tx TEXT,"
+                        "rst_rx TEXT,"
+                        "qsl TEXT,"
+                        "comment TEXT"
+                        ")"))
+                    || !query.exec(QStringLiteral(
+                        "INSERT INTO contacts (id, date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, qsl, comment) "
+                        "SELECT id, date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, '', comment "
                         "FROM contacts_old"))
                     || !query.exec(QStringLiteral("DROP TABLE contacts_old"))) {
                     statusBar()->showMessage(query.lastError().text());
@@ -437,6 +508,7 @@ bool MainWindow::initializeDatabase()
             "grid TEXT,"
             "rst_tx TEXT,"
             "rst_rx TEXT,"
+            "qsl TEXT,"
             "comment TEXT"
             ")"))) {
         statusBar()->showMessage(query.lastError().text());
@@ -452,8 +524,8 @@ bool MainWindow::addLoggedContact(const UdpLoggedContact &contact)
 
     QSqlQuery insertQuery(database);
     insertQuery.prepare(QStringLiteral(
-        "INSERT INTO contacts (date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, comment) "
-        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :grid, :rst_tx, :rst_rx, :comment)"));
+        "INSERT INTO contacts (date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, qsl, comment) "
+        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :grid, :rst_tx, :rst_rx, :qsl, :comment)"));
     insertQuery.bindValue(QStringLiteral(":date"), contact.date.toString(Qt::ISODate));
     insertQuery.bindValue(QStringLiteral(":time"), contact.time.toString(QStringLiteral("HH:mm:ss")));
     insertQuery.bindValue(QStringLiteral(":call"), contact.call);
@@ -464,14 +536,47 @@ bool MainWindow::addLoggedContact(const UdpLoggedContact &contact)
     insertQuery.bindValue(QStringLiteral(":grid"), contact.grid);
     insertQuery.bindValue(QStringLiteral(":rst_tx"), contact.rstTx);
     insertQuery.bindValue(QStringLiteral(":rst_rx"), contact.rstRx);
+    insertQuery.bindValue(QStringLiteral(":qsl"), QString());
     insertQuery.bindValue(QStringLiteral(":comment"), contact.comment);
 
     if (!insertQuery.exec()) {
+        qWarning().noquote()
+            << "UDP contact insert failed"
+            << insertQuery.lastError().text()
+            << "date=" << contact.date.toString(Qt::ISODate)
+            << "time=" << contact.time.toString(QStringLiteral("HH:mm:ss"))
+            << "call=" << contact.call
+            << "band=" << contact.band
+            << "frequency=" << contact.frequency
+            << "mode=" << contact.mode
+            << "submode=" << contact.submode;
         statusBar()->showMessage(insertQuery.lastError().text(), 5000);
         return false;
     }
 
-    m_model->select();
+    const QVariant insertedId = insertQuery.lastInsertId();
+    qDebug().noquote()
+        << "UDP contact inserted"
+        << "id=" << insertedId.toString()
+        << "call=" << contact.call;
+
+    if (!m_model->select()) {
+        qWarning().noquote() << "Contact model refresh failed" << m_model->lastError().text();
+        statusBar()->showMessage(m_model->lastError().text(), 5000);
+        return true;
+    }
+
+    if (insertedId.isValid()) {
+        const int idColumn = m_model->fieldIndex(QStringLiteral("id"));
+        for (int row = 0; row < m_model->rowCount(); ++row) {
+            if (m_model->index(row, idColumn).data().toLongLong() == insertedId.toLongLong()) {
+                m_tableView->selectRow(row);
+                m_tableView->scrollTo(m_model->index(row, 0), QAbstractItemView::PositionAtCenter);
+                break;
+            }
+        }
+    }
+
     m_tableView->resizeColumnsToContents();
     return true;
 }
@@ -598,7 +703,7 @@ void MainWindow::configureLotwSettings()
 
 void MainWindow::downloadLotwReport(const QString &login,
                                     const QString &password,
-                                    const QString &qslSince,
+                                    const QString &qsoSince,
                                     bool usePost)
 {
     QUrl url(QStringLiteral("https://lotw.arrl.org/lotwuser/lotwreport.adi"));
@@ -606,9 +711,9 @@ void MainWindow::downloadLotwReport(const QString &login,
     query.addQueryItem(QStringLiteral("login"), login);
     query.addQueryItem(QStringLiteral("password"), password);
     query.addQueryItem(QStringLiteral("qso_query"), QStringLiteral("1"));
-    query.addQueryItem(QStringLiteral("qso_qsl"), QStringLiteral("yes"));
+    query.addQueryItem(QStringLiteral("qso_qsl"), QStringLiteral("no"));
     query.addQueryItem(QStringLiteral("qso_qsldetail"), QStringLiteral("yes"));
-    query.addQueryItem(QStringLiteral("qso_qslsince"), qslSince);
+    query.addQueryItem(QStringLiteral("qso_startdate"), qsoSince);
 
     QNetworkRequest request(url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
@@ -630,7 +735,7 @@ void MainWindow::downloadLotwReport(const QString &login,
                                  ? QStringLiteral("Retrying LoTW report download...")
                                  : QStringLiteral("Downloading LoTW report..."));
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply, login, password, qslSince, usePost]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, login, password, qsoSince, usePost]() {
         const QByteArray data = reply->readAll();
         const QNetworkReply::NetworkError error = reply->error();
         const QString errorText = reply->errorString();
@@ -643,7 +748,7 @@ void MainWindow::downloadLotwReport(const QString &login,
         }
 
         if (!usePost && lotwCredentialsRejected(data)) {
-            downloadLotwReport(login, password, qslSince, true);
+            downloadLotwReport(login, password, qsoSince, true);
             return;
         }
 
@@ -665,28 +770,28 @@ void MainWindow::importFromLotw()
     QDialog dialog(this);
     dialog.setWindowTitle(QStringLiteral("Import from LoTW"));
 
-    QLineEdit qslSinceEdit(QStringLiteral("2026-01-01"), &dialog);
+    QLineEdit qsoSinceEdit(QStringLiteral("2026-01-01"), &dialog);
 
     QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     connect(&buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
 
     QFormLayout layout(&dialog);
-    layout.addRow(QStringLiteral("QSLs since:"), &qslSinceEdit);
+    layout.addRow(QStringLiteral("QSOs since:"), &qsoSinceEdit);
     layout.addRow(&buttons);
 
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
 
-    const QString qslSince = qslSinceEdit.text().trimmed();
-    if (!QDate::fromString(qslSince, Qt::ISODate).isValid()) {
+    const QString qsoSince = qsoSinceEdit.text().trimmed();
+    if (!QDate::fromString(qsoSince, Qt::ISODate).isValid()) {
         QMessageBox::warning(this, QStringLiteral("LoTW Import"),
-                             QStringLiteral("QSLs since must use YYYY-MM-DD format."));
+                             QStringLiteral("QSOs since must use YYYY-MM-DD format."));
         return;
     }
 
-    downloadLotwReport(login, password, qslSince, false);
+    downloadLotwReport(login, password, qsoSince, false);
 }
 
 void MainWindow::importLotwData(const QByteArray &data)
@@ -719,24 +824,25 @@ void MainWindow::importLotwData(const QByteArray &data)
 
     QSqlQuery duplicateQuery(database);
     duplicateQuery.prepare(QStringLiteral(
-        "SELECT id, grid FROM contacts "
+        "SELECT id, grid, qsl FROM contacts "
         "WHERE date = :date AND time = :time AND UPPER(call) = UPPER(:call) "
         "AND band = :band AND mode = :mode LIMIT 1"));
 
-    QSqlQuery updateGridQuery(database);
-    updateGridQuery.prepare(QStringLiteral("UPDATE contacts SET grid = :grid WHERE id = :id"));
+    QSqlQuery updateContactQuery(database);
+    updateContactQuery.prepare(QStringLiteral("UPDATE contacts SET grid = :grid, qsl = :qsl WHERE id = :id"));
 
     QSqlQuery insertQuery(database);
     insertQuery.prepare(QStringLiteral(
         "INSERT INTO contacts "
-        "(date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, comment) "
+        "(date, time, call, band, frequency, mode, submode, grid, rst_tx, rst_rx, qsl, comment) "
         "VALUES "
-        "(:date, :time, :call, :band, :frequency, :mode, :submode, :grid, :rst_tx, :rst_rx, :comment)"));
+        "(:date, :time, :call, :band, :frequency, :mode, :submode, :grid, :rst_tx, :rst_rx, :qsl, :comment)"));
 
     int imported = 0;
     int duplicates = 0;
     int invalid = 0;
     int gridsUpdated = 0;
+    int qslUpdated = 0;
 
     for (const AdifRecord &record : records) {
         const QString date = adifDate(record.value(QStringLiteral("QSO_DATE")));
@@ -761,6 +867,7 @@ void MainWindow::importLotwData(const QByteArray &data)
         }
 
         const QString grid = recordGrid(record);
+        const QString qsl = displayQslStatus(record);
 
         duplicateQuery.bindValue(QStringLiteral(":date"), date);
         duplicateQuery.bindValue(QStringLiteral(":time"), time);
@@ -774,15 +881,25 @@ void MainWindow::importLotwData(const QByteArray &data)
         }
         if (duplicateQuery.next()) {
             const QString existingGrid = duplicateQuery.value(1).toString().trimmed();
-            if (existingGrid.isEmpty() && !grid.isEmpty()) {
-                updateGridQuery.bindValue(QStringLiteral(":grid"), grid);
-                updateGridQuery.bindValue(QStringLiteral(":id"), duplicateQuery.value(0));
-                if (!updateGridQuery.exec()) {
+            const QString existingQsl = duplicateQuery.value(2).toString().trimmed();
+            const bool shouldUpdateGrid = existingGrid.isEmpty() && !grid.isEmpty();
+            const bool shouldUpdateQsl = existingQsl != qsl;
+            if (shouldUpdateGrid || shouldUpdateQsl) {
+                updateContactQuery.bindValue(QStringLiteral(":grid"),
+                                             shouldUpdateGrid ? grid : existingGrid);
+                updateContactQuery.bindValue(QStringLiteral(":qsl"), qsl);
+                updateContactQuery.bindValue(QStringLiteral(":id"), duplicateQuery.value(0));
+                if (!updateContactQuery.exec()) {
                     database.rollback();
-                    QMessageBox::warning(this, QStringLiteral("LoTW Import"), updateGridQuery.lastError().text());
+                    QMessageBox::warning(this, QStringLiteral("LoTW Import"), updateContactQuery.lastError().text());
                     return;
                 }
-                ++gridsUpdated;
+                if (shouldUpdateGrid) {
+                    ++gridsUpdated;
+                }
+                if (shouldUpdateQsl) {
+                    ++qslUpdated;
+                }
             }
             ++duplicates;
             continue;
@@ -808,6 +925,7 @@ void MainWindow::importLotwData(const QByteArray &data)
         insertQuery.bindValue(QStringLiteral(":grid"), grid);
         insertQuery.bindValue(QStringLiteral(":rst_tx"), record.value(QStringLiteral("RST_SENT")).trimmed());
         insertQuery.bindValue(QStringLiteral(":rst_rx"), record.value(QStringLiteral("RST_RCVD")).trimmed());
+        insertQuery.bindValue(QStringLiteral(":qsl"), qsl);
         insertQuery.bindValue(QStringLiteral(":comment"), record.value(QStringLiteral("COMMENT")).trimmed());
 
         if (!insertQuery.exec()) {
@@ -829,10 +947,11 @@ void MainWindow::importLotwData(const QByteArray &data)
     QMessageBox::information(
         this,
         QStringLiteral("LoTW Import"),
-        QStringLiteral("Imported: %1\nDuplicates skipped: %2\nMissing grids updated: %3\nInvalid records skipped: %4")
+        QStringLiteral("Imported: %1\nDuplicates skipped: %2\nMissing grids updated: %3\nQSL statuses updated: %4\nInvalid records skipped: %5")
             .arg(imported)
             .arg(duplicates)
             .arg(gridsUpdated)
+            .arg(qslUpdated)
             .arg(invalid));
 }
 
@@ -854,6 +973,7 @@ void MainWindow::setupModel()
     m_model->setHeaderData(m_model->fieldIndex("grid"), Qt::Horizontal, "Grid");
     m_model->setHeaderData(m_model->fieldIndex("rst_tx"), Qt::Horizontal, "RST TX");
     m_model->setHeaderData(m_model->fieldIndex("rst_rx"), Qt::Horizontal, "RST RX");
+    m_model->setHeaderData(m_model->fieldIndex("qsl"), Qt::Horizontal, "QSL");
     m_model->setHeaderData(m_model->fieldIndex("comment"), Qt::Horizontal, "Comment");
 }
 
