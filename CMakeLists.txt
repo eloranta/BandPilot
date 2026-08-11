@@ -14,6 +14,13 @@ find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Sql Network)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Sql Network)
 
 set(PROJECT_SOURCES
+    src/contact.h
+    src/contactdatabase.cpp
+    src/contactdatabase.h
+    src/lotwcredentials.cpp
+    src/lotwcredentials.h
+    src/lotwimporter.cpp
+    src/lotwimporter.h
     src/main.cpp
     src/mainwindow.cpp
     src/mainwindow.h

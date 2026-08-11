@@ -132,7 +132,7 @@ bool decodeType2(QDataStream &stream, const QString &id)
     return true;
 }
 
-std::optional<UdpLoggedContact> decodeType5(QDataStream &stream, const QString &id)
+std::optional<Contact> decodeType5(QDataStream &stream, const QString &id)
 {
     QDateTime dateTimeOff;
     stream >> dateTimeOff;
@@ -176,9 +176,9 @@ std::optional<UdpLoggedContact> decodeType5(QDataStream &stream, const QString &
         << "name=" << name
         << "comment=" << comment;
 
-    UdpLoggedContact contact;
-    contact.date = dateTimeOff.date();
-    contact.time = dateTimeOff.time();
+    Contact contact;
+    contact.date = dateTimeOff.date().toString(Qt::ISODate);
+    contact.time = dateTimeOff.time().toString(QStringLiteral("HH:mm:ss"));
     contact.call = dxCall;
     contact.band = band;
     contact.frequency = frequencyFromHz(dialFreqHz);
@@ -196,7 +196,7 @@ std::optional<UdpLoggedContact> decodeType5(QDataStream &stream, const QString &
     return contact;
 }
 
-std::optional<UdpLoggedContact> decodeType6(QDataStream &stream, const QString &id)
+std::optional<Contact> decodeType6(QDataStream &stream, const QString &id)
 {
     QDateTime dateTimeOff;
     stream >> dateTimeOff;
@@ -257,9 +257,9 @@ std::optional<UdpLoggedContact> decodeType6(QDataStream &stream, const QString &
         << "propagation=" << adifPropagationMode
         << "comment=" << comment;
 
-    UdpLoggedContact contact;
-    contact.date = dateTimeOff.date();
-    contact.time = dateTimeOff.time();
+    Contact contact;
+    contact.date = dateTimeOff.date().toString(Qt::ISODate);
+    contact.time = dateTimeOff.time().toString(QStringLiteral("HH:mm:ss"));
     contact.call = dxCall;
     contact.band = band;
     contact.frequency = frequencyFromHz(txFreqHz);
@@ -283,7 +283,7 @@ std::optional<UdpLoggedContact> decodeType6(QDataStream &stream, const QString &
     return contact;
 }
 
-std::optional<UdpLoggedContact> decodeWsjtxDatagram(const QByteArray &datagram)
+std::optional<Contact> decodeWsjtxDatagram(const QByteArray &datagram)
 {
     QDataStream stream(datagram);
     stream.setByteOrder(QDataStream::BigEndian);
@@ -368,7 +368,7 @@ void UdpReceiver::onReadyRead()
 
         qDebug() << "UDP datagram from" << sender.toString() << ":" << senderPort
                  << "bytes=" << bytesRead;
-        const std::optional<UdpLoggedContact> loggedContact = decodeWsjtxDatagram(datagram);
+        const std::optional<Contact> loggedContact = decodeWsjtxDatagram(datagram);
         if (loggedContact.has_value()) {
             emit loggedContactReceived(loggedContact.value());
         }

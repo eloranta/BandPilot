@@ -1,27 +1,11 @@
 #ifndef UDPRECEIVER_H
 #define UDPRECEIVER_H
 
-#include <QHostAddress>
-#include <QDate>
-#include <QObject>
-#include <QString>
-#include <QTime>
-#include <QUdpSocket>
+#include "contact.h"
 
-struct UdpLoggedContact
-{
-    QDate date;
-    QTime time;
-    QString call;
-    QString band;
-    QString frequency;
-    QString mode;
-    QString submode;
-    QString grid;
-    QString rstTx;
-    QString rstRx;
-    QString comment;
-};
+#include <QHostAddress>
+#include <QObject>
+#include <QUdpSocket>
 
 class UdpReceiver : public QObject
 {
@@ -33,7 +17,7 @@ public:
     bool start(quint16 port = 2237);
 
 signals:
-    void loggedContactReceived(const UdpLoggedContact &contact);
+    void loggedContactReceived(const Contact &contact);
 
 private slots:
     void onReadyRead();
