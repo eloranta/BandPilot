@@ -944,15 +944,14 @@ void MainWindow::importLotwData(const QByteArray &data)
 
     m_model->select();
     m_tableView->resizeColumnsToContents();
-    QMessageBox::information(
-        this,
-        QStringLiteral("LoTW Import"),
-        QStringLiteral("Imported: %1\nDuplicates skipped: %2\nMissing grids updated: %3\nQSL statuses updated: %4\nInvalid records skipped: %5")
-            .arg(imported)
-            .arg(duplicates)
-            .arg(gridsUpdated)
-            .arg(qslUpdated)
-            .arg(invalid));
+    const QString statusSummary = QStringLiteral("LoTW import: %1 imported, %2 duplicates, %3 grids updated, "
+                                                 "%4 QSL statuses updated, %5 invalid")
+                                      .arg(imported)
+                                      .arg(duplicates)
+                                      .arg(gridsUpdated)
+                                      .arg(qslUpdated)
+                                      .arg(invalid);
+    statusBar()->showMessage(statusSummary);
 }
 
 void MainWindow::setupModel()
