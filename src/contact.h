@@ -12,6 +12,7 @@ struct Contact
     QString frequency;
     QString mode;
     QString submode;
+    QString country;
     QString grid;
     QString rstTx;
     QString rstRx;

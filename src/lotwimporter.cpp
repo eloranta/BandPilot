@@ -78,9 +78,18 @@ QString adifTime(const QString &value)
 
 QString displayBand(const QString &value)
 {
-    static const QRegularExpression pattern(QStringLiteral("^(\\d+(?:\\.\\d+)?)M$"),
-                                            QRegularExpression::CaseInsensitiveOption);
-    const QRegularExpressionMatch match = pattern.match(value.trimmed());
+    static const QRegularExpression meterPattern(QStringLiteral("^(\\d+(?:\\.\\d+)?)M$"),
+                                                 QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression centimeterPattern(QStringLiteral("^(\\d+(?:\\.\\d+)?)CM$"),
+                                                      QRegularExpression::CaseInsensitiveOption);
+
+    const QString trimmed = value.trimmed();
+    const QRegularExpressionMatch centimeterMatch = centimeterPattern.match(trimmed);
+    if (centimeterMatch.hasMatch()) {
+        return centimeterMatch.captured(1) + QStringLiteral(" cm");
+    }
+
+    const QRegularExpressionMatch match = meterPattern.match(trimmed);
     return match.hasMatch() ? match.captured(1) + QStringLiteral(" m") : value.trimmed();
 }
 
@@ -125,6 +134,24 @@ QString recordGrid(const AdifRecord &record)
             if (!grid.isEmpty()) {
                 return grid;
             }
+        }
+    }
+
+    return QString();
+}
+
+QString recordCountry(const AdifRecord &record)
+{
+    const QStringList fields = {
+        QStringLiteral("COUNTRY"),
+        QStringLiteral("APP_LOTW_COUNTRY"),
+        QStringLiteral("APP_LOTW_DXCCRECORD_COUNTRY")
+    };
+
+    for (const QString &field : fields) {
+        const QString country = record.value(field).trimmed();
+        if (!country.isEmpty()) {
+            return country;
         }
     }
 
@@ -270,8 +297,10 @@ LotwParseResult LotwImporter::parseReport(const QByteArray &data) const
         }
 
         contact.grid = recordGrid(record);
+        contact.country = recordCountry(record);
         contact.qsl = displayQslStatus(record);
-        contact.frequency = record.value(QStringLiteral("FREQ")).trimmed();
+        const QString frequency = record.value(QStringLiteral("FREQ")).trimmed();
+        contact.frequency = frequency.isNull() ? QStringLiteral("") : frequency;
         contact.rstTx = record.value(QStringLiteral("RST_SENT")).trimmed();
         contact.rstRx = record.value(QStringLiteral("RST_RCVD")).trimmed();
         contact.comment = record.value(QStringLiteral("COMMENT")).trimmed();

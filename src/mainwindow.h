@@ -11,6 +11,7 @@
 class QNetworkAccessManager;
 class QSqlTableModel;
 class QTableView;
+class QTabWidget;
 class QVariant;
 class UdpReceiver;
 struct Contact;
@@ -36,10 +37,14 @@ private:
     void setupModel();
     void setupUi();
     void refreshTable();
+    void refreshDxccTable();
     void selectContactById(const QVariant &id);
 
     QSqlTableModel *m_model = nullptr;
+    QSqlTableModel *m_dxccModel = nullptr;
     QTableView *m_tableView = nullptr;
+    QTableView *m_dxccTableView = nullptr;
+    QTabWidget *m_tabWidget = nullptr;
     UdpReceiver *m_udpReceiver = nullptr;
     QNetworkAccessManager *m_networkManager = nullptr;
     ContactDatabase m_database;

@@ -22,6 +22,7 @@
 #include <QSqlError>
 #include <QSqlTableModel>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QTableView>
 #include <QUrlQuery>
 #include <QVariant>
@@ -328,6 +329,11 @@ void MainWindow::importLotwData(const QByteArray &data)
 void MainWindow::setupModel()
 {
     m_model = m_database.createModel(this);
+    m_dxccModel = m_database.createDxccModel(this);
+
+    connect(m_model, &QSqlTableModel::dataChanged, this, [this]() {
+        refreshDxccTable();
+    });
 }
 
 void MainWindow::setupUi()
@@ -357,7 +363,24 @@ void MainWindow::setupUi()
     m_tableView->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     m_tableView->resizeColumnsToContents();
 
-    setCentralWidget(m_tableView);
+    m_dxccTableView = new QTableView(this);
+    m_dxccTableView->setModel(m_dxccModel);
+    m_dxccTableView->setAlternatingRowColors(true);
+    m_dxccTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_dxccTableView->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_dxccTableView->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_dxccTableView->setSortingEnabled(false);
+    m_dxccTableView->hideColumn(m_dxccModel->fieldIndex(QStringLiteral("id")));
+    m_dxccTableView->hideColumn(m_dxccModel->fieldIndex(QStringLiteral("sort_order")));
+    m_dxccTableView->horizontalHeader()->setStretchLastSection(true);
+    m_dxccTableView->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    m_dxccTableView->resizeColumnsToContents();
+
+    m_tabWidget = new QTabWidget(this);
+    m_tabWidget->addTab(m_tableView, QStringLiteral("Contacts"));
+    m_tabWidget->addTab(m_dxccTableView, QStringLiteral("DXCC"));
+
+    setCentralWidget(m_tabWidget);
     statusBar()->showMessage(QStringLiteral("Database ready"));
 }
 
@@ -370,6 +393,30 @@ void MainWindow::refreshTable()
     }
 
     m_tableView->resizeColumnsToContents();
+    refreshDxccTable();
+}
+
+void MainWindow::refreshDxccTable()
+{
+    if (!m_dxccModel) {
+        return;
+    }
+
+    QString errorMessage;
+    if (!m_database.refreshDxccSummary(&errorMessage)) {
+        qWarning().noquote() << "DXCC summary refresh failed" << errorMessage;
+        statusBar()->showMessage(errorMessage, 5000);
+        return;
+    }
+
+    if (!m_dxccModel->select()) {
+        qWarning().noquote() << "DXCC model refresh failed" << m_dxccModel->lastError().text();
+        statusBar()->showMessage(m_dxccModel->lastError().text(), 5000);
+        return;
+    }
+    if (m_dxccTableView) {
+        m_dxccTableView->resizeColumnsToContents();
+    }
 }
 
 void MainWindow::selectContactById(const QVariant &id)
