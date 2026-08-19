@@ -1,5 +1,7 @@
 #include "database.h"
 
+#include "dxcc_entities.h"
+
 #include <QDate>
 #include <QDir>
 #include <QRandomGenerator>
@@ -140,6 +142,67 @@ bool seedIfEmpty(QString *errorMessage)
     return true;
 }
 
+bool createDxccEntityTable(QString *errorMessage)
+{
+    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    const bool ok = query.exec(
+        "CREATE TABLE IF NOT EXISTS dxcc_entity ("
+        "  entity_code INTEGER PRIMARY KEY,"
+        "  entity TEXT NOT NULL"
+        ")");
+
+    if (!ok && errorMessage)
+        *errorMessage = query.lastError().text();
+
+    return ok;
+}
+
+// Returns row count, or -1 on error.
+int dxccEntityRowCount()
+{
+    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    if (!query.exec("SELECT COUNT(*) FROM dxcc_entity") || !query.next())
+        return -1;
+    return query.value(0).toInt();
+}
+
+bool seedDxccEntityIfEmpty(QString *errorMessage)
+{
+    const int count = dxccEntityRowCount();
+    if (count != 0)
+        return count >= 0; // already has data, or the COUNT query itself failed above
+
+    QSqlDatabase db = QSqlDatabase::database(kConnectionName);
+    if (!db.transaction()) {
+        if (errorMessage)
+            *errorMessage = db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(db);
+    query.prepare("INSERT INTO dxcc_entity (entity_code, entity) VALUES (:code, :entity)");
+
+    for (const DxccEntitySeed &row : kDxccEntities) {
+        query.bindValue(":code", row.code);
+        query.bindValue(":entity", QString::fromUtf8(row.name));
+
+        if (!query.exec()) {
+            if (errorMessage)
+                *errorMessage = query.lastError().text();
+            db.rollback();
+            return false;
+        }
+    }
+
+    if (!db.commit()) {
+        if (errorMessage)
+            *errorMessage = db.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace
 
 namespace Database {
@@ -171,6 +234,12 @@ bool initialize(QString *errorMessage)
         return false;
 
     if (!seedIfEmpty(errorMessage))
+        return false;
+
+    if (!createDxccEntityTable(errorMessage))
+        return false;
+
+    if (!seedDxccEntityIfEmpty(errorMessage))
         return false;
 
     return true;

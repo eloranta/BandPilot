@@ -20,6 +20,7 @@ qt_add_executable(BandPilot
     src/mainwindow.cpp
     src/database.h
     src/database.cpp
+    src/dxcc_entities.h
 )
 
 target_include_directories(BandPilot PRIVATE src)
