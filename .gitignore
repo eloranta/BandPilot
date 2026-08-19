@@ -1,0 +1,59 @@
+# Build output
+build/
+build-*/
+out/
+cmake-build-*/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Qt Creator
+CMakeLists.txt.user
+CMakeLists.txt.user.*
+*.autosave
+*.qmlproject.user
+*.qmlproject.user.*
+
+# Qt build artifacts (in case of in-source builds)
+*_autogen/
+*.moc
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+
+# Compiled binaries / objects
+*.obj
+*.o
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.lib
+*.exp
+
+# Visual Studio
+.vs/
+*.vcxproj*
+*.sln
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# OS cruft
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# App data / logs generated at runtime
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.log
