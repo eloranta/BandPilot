@@ -1,13 +1,19 @@
 #include "database.h"
 
+#include "cty.h"
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QHash>
 #include <QMap>
+#include <QRegularExpression>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QTextStream>
 #include <QVector>
 
@@ -279,6 +285,198 @@ bool migrateNullDxccEntities(QString *errorMessage)
     return ok;
 }
 
+// Path to the cty.dat callsign-prefix file, kept alongside the database
+// file. Unlike dxcc-entities.txt, this isn't bundled with the app (it's a
+// frequently-updated external file the user downloads themselves), so its
+// absence is not an error: ADIF import just skips the callsign-based DXCC
+// lookup and falls back to "(Unknown)".
+QString ctyFilePath()
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    return dir + QStringLiteral("/cty.dat");
+}
+
+// Normalizes an entity name for fuzzy matching between cty.dat's naming
+// (Jim Reisert AD1C's "Big CTY") and this app's ARRL-derived dxcc_entity
+// names: drops parentheticals, punctuation, and a handful of common filler
+// or alternate-spelling words, then sorts the remaining words so word-order
+// differences don't matter.
+QString normalizeEntityName(QString name)
+{
+    static const QSet<QString> kStopWords = {
+        QStringLiteral("the"),      QStringLiteral("of"),        QStringLiteral("republic"),
+        QStringLiteral("democratic"), QStringLiteral("peoples"), QStringLiteral("islamic"),
+        QStringLiteral("federal"),  QStringLiteral("fed"),       QStringLiteral("rep"),
+        QStringLiteral("repub"),    QStringLiteral("kingdom"),   QStringLiteral("state"),
+        QStringLiteral("plurinational"), QStringLiteral("bolivarian"), QStringLiteral("islands"),
+        QStringLiteral("island"),   QStringLiteral("is"),        QStringLiteral("isl"),
+        QStringLiteral("isls"),     QStringLiteral("i"),         QStringLiteral("rock"),
+        QStringLiteral("rocks"),    QStringLiteral("reef"),      QStringLiteral("reefs"),
+        QStringLiteral("atoll"),    QStringLiteral("group"),     QStringLiteral("archipelago"),
+        QStringLiteral("center"),   QStringLiteral("centre"),    QStringLiteral("ctr"),
+        QStringLiteral("intl"),     QStringLiteral("international"), QStringLiteral("city"),
+    };
+
+    name = name.toLower();
+    name.remove(QRegularExpression(QStringLiteral("\\([^)]*\\)")));
+    name.replace(QLatin1Char('&'), QStringLiteral(" and "));
+    name.remove(QRegularExpression(QStringLiteral("[.,()'/-]")));
+
+    QStringList words;
+    for (const QString &word :
+         name.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts)) {
+        if (!kStopWords.contains(word))
+            words.append(word);
+    }
+    words.sort();
+    return words.join(QLatin1Char(' '));
+}
+
+// Normalized dxcc_entity name -> entity_code, built once from the database
+// and cached for the process lifetime (dxcc_entity is seeded once at
+// startup and never changes afterwards). Names whose normalized form is
+// ambiguous (matches more than one distinct entity, e.g. "Cocos I." vs
+// "Cocos (Keeling) Is.") are dropped rather than guessed at.
+const QMap<QString, int> &dxccNameIndex()
+{
+    static const QMap<QString, int> index = [] {
+        QMap<QString, int> result;
+        QSet<QString> ambiguous;
+
+        QSqlQuery query(QStringLiteral("SELECT entity_code, entity FROM dxcc_entity"),
+                         QSqlDatabase::database(kConnectionName));
+        while (query.next()) {
+            const int code = query.value(0).toInt();
+            const QString key = normalizeEntityName(query.value(1).toString());
+            if (result.contains(key) && result.value(key) != code)
+                ambiguous.insert(key);
+            else
+                result.insert(key, code);
+        }
+        for (const QString &key : ambiguous)
+            result.remove(key);
+
+        return result;
+    }();
+
+    return index;
+}
+
+// A handful of cty.dat entity names that name-normalization alone can't
+// bridge to their ARRL dxcc_entity counterpart: genuine alternate spellings
+// (Rodriguez/Rodrigues), abbreviation styles the normalizer doesn't expand
+// (St./Saint, N.Z./New Zealand, Pr./Prince), or cases where cty.dat splits
+// one DXCC entity into several zone-bookkeeping entries (Asiatic/European
+// Turkey, Sicily/African Italy) that ARRL counts as a single entity. Keyed
+// by the cty.dat name lower-cased; values are spelled as in
+// dxcc-entities.txt and still go through normalizeEntityName()/the index.
+const QHash<QString, QString> &dxccNameOverrides()
+{
+    static const QHash<QString, QString> overrides = {
+        {QStringLiteral("united states"), QStringLiteral("United States of America")},
+        {QStringLiteral("cape verde"), QStringLiteral("Cabo Verde (Repub of)")},
+        {QStringLiteral("vatican city"), QStringLiteral("Vatican")},
+        {QStringLiteral("central african republic"), QStringLiteral("Central Africa")},
+        {QStringLiteral("sicily"), QStringLiteral("Italy")},
+        {QStringLiteral("african italy"), QStringLiteral("Italy")},
+        {QStringLiteral("asiatic turkey"), QStringLiteral("Turkey")},
+        {QStringLiteral("european turkey"), QStringLiteral("Turkey")},
+        {QStringLiteral("north cook islands"), QStringLiteral("N. Cook Is.")},
+        {QStringLiteral("south cook islands"), QStringLiteral("S. Cook Is.")},
+        {QStringLiteral("western kiribati"), QStringLiteral("W. Kiribati (Gilbert Is.)")},
+        {QStringLiteral("central kiribati"), QStringLiteral("C. Kiribati (British Phoenix Is)")},
+        {QStringLiteral("eastern kiribati"), QStringLiteral("E. Kiribati (Line Is.)")},
+        {QStringLiteral("st. barthelemy"), QStringLiteral("Saint Barthelemy")},
+        {QStringLiteral("st. martin"), QStringLiteral("Saint Martin")},
+        {QStringLiteral("us virgin islands"), QStringLiteral("Virgin Is.")},
+        {QStringLiteral("rodriguez island"), QStringLiteral("Rodrigues I.")},
+        {QStringLiteral("uk base areas on cyprus"), QStringLiteral("UK Sov. Base Areas on Cyprus")},
+        {QStringLiteral("n.z. subantarctic is."), QStringLiteral("New Zealand Subantarctic Islands")},
+        {QStringLiteral("pr. edward & marion is."), QStringLiteral("Prince Edward & Marion Is.")},
+        {QStringLiteral("bear island"), QStringLiteral("Svalbard")},
+    };
+    return overrides;
+}
+
+// Best-effort DXCC entity code for a callsign via cty.dat (if loaded),
+// correlated to this app's dxcc_entity table by (overridden, then fuzzy)
+// name match. Returns -1 if cty.dat isn't loaded, the callsign matches no
+// prefix, or the matched country name doesn't correlate to a known entity.
+int dxccCodeForCallsign(const QString &callsign)
+{
+    const QString country = Cty::countryForCallsign(callsign);
+    if (country.isEmpty())
+        return -1;
+
+    const auto overrideIt = dxccNameOverrides().constFind(country.trimmed().toLower());
+    const QString lookupName =
+        overrideIt != dxccNameOverrides().constEnd() ? overrideIt.value() : country;
+
+    return dxccNameIndex().value(normalizeEntityName(lookupName), -1);
+}
+
+// Re-tries the callsign -> DXCC lookup for any contact still sitting at the
+// "(Unknown)" sentinel (or, defensively, still NULL) now that cty.dat is
+// loaded, so QSOs imported before cty.dat existed -- or before it was last
+// updated -- get resolved without needing to be re-imported.
+bool backfillUnresolvedDxccEntities(QString *errorMessage)
+{
+    if (!Cty::isLoaded())
+        return true; // nothing to look up without a cty.dat
+
+    QSqlDatabase db = QSqlDatabase::database(kConnectionName);
+    QSqlQuery select(db);
+    if (!select.exec(QStringLiteral(
+            "SELECT id, call FROM contacts WHERE dxcc_entity IS NULL OR dxcc_entity = %1")
+                          .arg(kUnknownDxccCode))) {
+        if (errorMessage)
+            *errorMessage = select.lastError().text();
+        return false;
+    }
+
+    struct Resolution
+    {
+        int id;
+        int code;
+    };
+    QVector<Resolution> resolutions;
+    while (select.next()) {
+        const int code = dxccCodeForCallsign(select.value(1).toString());
+        if (code >= 1 && code <= 999)
+            resolutions.append({select.value(0).toInt(), code});
+    }
+
+    if (resolutions.isEmpty())
+        return true;
+
+    if (!db.transaction()) {
+        if (errorMessage)
+            *errorMessage = db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery update(db);
+    update.prepare(QStringLiteral("UPDATE contacts SET dxcc_entity = :code WHERE id = :id"));
+    for (const Resolution &resolution : resolutions) {
+        update.bindValue(":code", resolution.code);
+        update.bindValue(":id", resolution.id);
+        if (!update.exec()) {
+            if (errorMessage)
+                *errorMessage = update.lastError().text();
+            db.rollback();
+            return false;
+        }
+    }
+
+    if (!db.commit()) {
+        if (errorMessage)
+            *errorMessage = db.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace
 
 namespace Database {
@@ -322,6 +520,11 @@ bool initialize(QString *errorMessage)
         return false;
 
     if (!migrateNullDxccEntities(errorMessage))
+        return false;
+
+    Cty::load(ctyFilePath()); // best-effort; ADIF import works fine without it
+
+    if (!backfillUnresolvedDxccEntities(errorMessage))
         return false;
 
     return true;
@@ -377,9 +580,12 @@ int importAdif(const QString &filePath, QString *errorMessage)
                                          : record.value(QStringLiteral("notes")));
 
         bool dxccOk = false;
-        const int dxccCode = record.value(QStringLiteral("dxcc")).toInt(&dxccOk);
-        query.bindValue(":dxcc_entity", dxccOk && dxccCode >= 1 && dxccCode <= 999 ? dxccCode
-                                                                                    : kUnknownDxccCode);
+        int dxccCode = record.value(QStringLiteral("dxcc")).toInt(&dxccOk);
+        if (!dxccOk || dxccCode < 1 || dxccCode > 999)
+            dxccCode = dxccCodeForCallsign(call); // -1 if no cty.dat match
+        if (dxccCode < 1 || dxccCode > 999)
+            dxccCode = kUnknownDxccCode;
+        query.bindValue(":dxcc_entity", dxccCode);
 
         if (!query.exec()) {
             if (errorMessage)
