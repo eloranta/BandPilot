@@ -9,13 +9,19 @@
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QTextStream>
-#include <QVariant>
 #include <QVector>
 
 namespace {
 
 const char *const kConnectionName = "bandpilot_connection";
 const char *const kDxccEntitiesFileName = "dxcc-entities.txt";
+
+// Sentinel entity_code standing in for "no known DXCC entity" (no real DXCC
+// entity is numbered this high; the current list tops out at 522). Contacts
+// use this instead of a NULL dxcc_entity because QSqlRelationalTableModel
+// joins the "dxcc_entity" table with an INNER JOIN, silently hiding rows
+// whose foreign key doesn't match any row in the related table.
+const int kUnknownDxccCode = 999;
 
 // One seed row parsed from dxcc-entities.txt ("<code>|<name>" per line).
 struct DxccEntitySeed
@@ -241,6 +247,38 @@ bool seedDxccEntityIfEmpty(QString *errorMessage)
     return true;
 }
 
+// Makes sure the "(Unknown)" sentinel entity exists, regardless of whether
+// dxcc_entity was just seeded or already populated from an earlier run.
+bool ensureUnknownDxccEntity(QString *errorMessage)
+{
+    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    query.prepare("INSERT OR IGNORE INTO dxcc_entity (entity_code, entity) VALUES (:code, :entity)");
+    query.bindValue(":code", kUnknownDxccCode);
+    query.bindValue(":entity", QStringLiteral("(Unknown)"));
+
+    const bool ok = query.exec();
+    if (!ok && errorMessage)
+        *errorMessage = query.lastError().text();
+
+    return ok;
+}
+
+// Contacts imported before the sentinel above existed (or with no DXCC
+// info at all) may still have a NULL dxcc_entity; point those at the
+// sentinel too so they aren't dropped by the relational table model's join.
+bool migrateNullDxccEntities(QString *errorMessage)
+{
+    QSqlQuery query(QSqlDatabase::database(kConnectionName));
+    query.prepare("UPDATE contacts SET dxcc_entity = :code WHERE dxcc_entity IS NULL");
+    query.bindValue(":code", kUnknownDxccCode);
+
+    const bool ok = query.exec();
+    if (!ok && errorMessage)
+        *errorMessage = query.lastError().text();
+
+    return ok;
+}
+
 } // namespace
 
 namespace Database {
@@ -278,6 +316,12 @@ bool initialize(QString *errorMessage)
         return false;
 
     if (!seedDxccEntityIfEmpty(errorMessage))
+        return false;
+
+    if (!ensureUnknownDxccEntity(errorMessage))
+        return false;
+
+    if (!migrateNullDxccEntities(errorMessage))
         return false;
 
     return true;
@@ -334,8 +378,8 @@ int importAdif(const QString &filePath, QString *errorMessage)
 
         bool dxccOk = false;
         const int dxccCode = record.value(QStringLiteral("dxcc")).toInt(&dxccOk);
-        query.bindValue(":dxcc_entity",
-                         dxccOk && dxccCode >= 1 && dxccCode <= 999 ? QVariant(dxccCode) : QVariant());
+        query.bindValue(":dxcc_entity", dxccOk && dxccCode >= 1 && dxccCode <= 999 ? dxccCode
+                                                                                    : kUnknownDxccCode);
 
         if (!query.exec()) {
             if (errorMessage)
