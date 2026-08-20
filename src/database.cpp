@@ -240,9 +240,6 @@ bool seedDxccEntityIfEmpty(QString *errorMessage)
     if (count != 0)
         return count >= 0; // already has data, or the COUNT query itself failed above
 
-    if (!ensureDxccEntitiesFile(errorMessage))
-        return false;
-
     QVector<DxccEntitySeed> entities;
     if (!loadDxccEntities(dxccEntitiesFilePath(), &entities, errorMessage))
         return false;
@@ -309,6 +306,9 @@ bool initialize(QString *errorMessage)
         return false;
 
     if (!seedIfEmpty(errorMessage))
+        return false;
+
+    if (!ensureDxccEntitiesFile(errorMessage))
         return false;
 
     if (!createDxccEntityTable(errorMessage))
