@@ -1,16 +1,13 @@
 #include "database.h"
 
 #include <QCoreApplication>
-#include <QDate>
 #include <QDir>
 #include <QFile>
-#include <QRandomGenerator>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QTextStream>
-#include <QTime>
 #include <QVector>
 
 namespace {
@@ -24,35 +21,6 @@ struct DxccEntitySeed
     int code;
     QString name;
 };
-
-// A handful of plausible sample QSOs used to seed an empty database so the
-// UI has something to show on first run.
-struct SeedContact
-{
-    QString call;
-    QString band;
-    QString frequency;
-    QString mode;
-    QString submode;
-    int dxccEntity;
-    QString grid;
-};
-
-// dxcc_entity values below are the standard ADIF/DXCC entity numbers for
-// each country, e.g. https://www.country-files.com/entity-list/
-QVector<SeedContact> seedTemplate()
-{
-    return {
-        {"W1AW",   "20m", "14.074", "FT8", "",    291, "FN31pr"},
-        {"G4XYZ",  "40m", "7.074",  "FT8", "",    223, "IO91wm"},
-        {"JA1ABC", "15m", "21.074", "FT8", "",    339, "PM95tp"},
-        {"VK2DEF", "10m", "28.450", "SSB", "USB", 150, "QF56od"},
-        {"DL3GHI", "80m", "3.573",  "FT4", "",    230, "JO50cp"},
-        {"OH2JKL", "17m", "18.100", "CW",  "",    224, "KP20eq"},
-        {"PY2MNO", "12m", "24.910", "SSB", "USB", 108, "GG66ff"},
-        {"ZS6PQR", "6m",  "50.313", "FT8", "",    462, "KG44dc"},
-    };
-}
 
 bool createContactsTable(QString *errorMessage)
 {
@@ -80,72 +48,6 @@ bool createContactsTable(QString *errorMessage)
         *errorMessage = query.lastError().text();
 
     return ok;
-}
-
-// Returns row count, or -1 on error.
-int contactsRowCount()
-{
-    QSqlQuery query(QSqlDatabase::database(kConnectionName));
-    if (!query.exec("SELECT COUNT(*) FROM contacts") || !query.next())
-        return -1;
-    return query.value(0).toInt();
-}
-
-bool seedIfEmpty(QString *errorMessage)
-{
-    const int count = contactsRowCount();
-    if (count != 0)
-        return count >= 0; // already has data, or the COUNT query itself failed above
-
-    QSqlDatabase db = QSqlDatabase::database(kConnectionName);
-    if (!db.transaction()) {
-        if (errorMessage)
-            *errorMessage = db.lastError().text();
-        return false;
-    }
-
-    QSqlQuery query(db);
-    query.prepare(
-        "INSERT INTO contacts "
-        "(date, time, call, band, frequency, mode, submode, dxcc_entity, grid, rst_tx, rst_rx, qsl) "
-        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :dxcc_entity, :grid, :rst_tx, :rst_rx, :qsl)");
-
-    const QVector<SeedContact> rows = seedTemplate();
-    QDate date = QDate::currentDate().addDays(-rows.size());
-
-    for (const SeedContact &row : rows) {
-        date = date.addDays(1);
-        const QTime time(QRandomGenerator::global()->bounded(24),
-                          QRandomGenerator::global()->bounded(60));
-
-        query.bindValue(":date", date.toString(Qt::ISODate));
-        query.bindValue(":time", time.toString("HH:mm"));
-        query.bindValue(":call", row.call);
-        query.bindValue(":band", row.band);
-        query.bindValue(":frequency", row.frequency);
-        query.bindValue(":mode", row.mode);
-        query.bindValue(":submode", row.submode);
-        query.bindValue(":dxcc_entity", row.dxccEntity);
-        query.bindValue(":grid", row.grid);
-        query.bindValue(":rst_tx", "59");
-        query.bindValue(":rst_rx", "59");
-        query.bindValue(":qsl", "N");
-
-        if (!query.exec()) {
-            if (errorMessage)
-                *errorMessage = query.lastError().text();
-            db.rollback();
-            return false;
-        }
-    }
-
-    if (!db.commit()) {
-        if (errorMessage)
-            *errorMessage = db.lastError().text();
-        return false;
-    }
-
-    return true;
 }
 
 // Path to the DXCC entity seed file, kept alongside the database file.
@@ -303,9 +205,6 @@ bool initialize(QString *errorMessage)
     }
 
     if (!createContactsTable(errorMessage))
-        return false;
-
-    if (!seedIfEmpty(errorMessage))
         return false;
 
     if (!ensureDxccEntitiesFile(errorMessage))

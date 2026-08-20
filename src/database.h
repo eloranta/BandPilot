@@ -5,16 +5,16 @@
 // Database access layer for BandPilot.
 //
 // Responsible for opening (and creating, if needed) the SQLite database in
-// the standard per-user application data location, ensuring the "contacts"
-// table exists, and seeding it with sample QSOs the first time the app runs
-// against an empty table.
+// the standard per-user application data location and ensuring the
+// "contacts" and "dxcc_entity" tables exist.
 //
 // The opened connection is registered under connectionName() so that other
 // layers (e.g. QSqlTableModel in the UI) can attach to it without needing to
 // pass a QSqlDatabase instance around.
 namespace Database {
 
-// Opens the database and ensures schema + seed data are in place.
+// Opens the database and ensures the schema (and DXCC entity seed data) is
+// in place.
 // Returns true on success. On failure, *errorMessage (if non-null) is set
 // to a human-readable description suitable for a status bar message.
 bool initialize(QString *errorMessage = nullptr);
