@@ -5,7 +5,8 @@
 #include <QHeaderView>
 #include <QMenu>
 #include <QMenuBar>
-#include <QSqlTableModel>
+#include <QSqlRelationalDelegate>
+#include <QSqlRelationalTableModel>
 #include <QStatusBar>
 #include <QTableView>
 
@@ -58,8 +59,17 @@ void MainWindow::loadDatabase()
         return;
     }
 
-    m_model = new QSqlTableModel(this, QSqlDatabase::database(Database::connectionName()));
+    m_model = new QSqlRelationalTableModel(this, QSqlDatabase::database(Database::connectionName()));
     m_model->setTable(QStringLiteral("contacts"));
+
+    // fieldIndex("dxcc_entity") stops resolving once the relation below is active and
+    // select() has run (the model renames that field after the related table's display
+    // column), so capture its position now while the name still resolves.
+    const int dxccEntityColumn = m_model->fieldIndex(QStringLiteral("dxcc_entity"));
+
+    m_model->setRelation(dxccEntityColumn,
+                          QSqlRelation(QStringLiteral("dxcc_entity"), QStringLiteral("entity_code"),
+                                       QStringLiteral("entity")));
     m_model->setEditStrategy(QSqlTableModel::OnFieldChange);
     m_model->select();
 
@@ -74,16 +84,16 @@ void MainWindow::loadDatabase()
     setHeader("frequency", tr("Frequency"));
     setHeader("mode", tr("Mode"));
     setHeader("submode", tr("Submode"));
-    setHeader("country", tr("Country"));
-    setHeader("dxcc_entity", tr("DXCC #"));
     setHeader("deleted_entity", tr("Deleted Entity"));
     setHeader("grid", tr("Grid"));
     setHeader("rst_tx", tr("RST Tx"));
     setHeader("rst_rx", tr("RST Rx"));
     setHeader("qsl", tr("QSL"));
     setHeader("comment", tr("Comment"));
+    m_model->setHeaderData(dxccEntityColumn, Qt::Horizontal, tr("DXCC Entity"));
 
     m_tableView->setModel(m_model);
+    m_tableView->setItemDelegate(new QSqlRelationalDelegate(m_tableView));
     m_tableView->resizeColumnsToContents();
 
     statusBar()->showMessage(

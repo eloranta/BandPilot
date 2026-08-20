@@ -4,12 +4,12 @@
 
 QT_BEGIN_NAMESPACE
 class QTableView;
-class QSqlTableModel;
+class QSqlRelationalTableModel;
 QT_END_NAMESPACE
 
 // Top-level application window: menu bar + a QTableView bound to the
 // "contacts" table + a status bar used to report database state. Wires the
-// UI layer to the business/data layer (Database + QSqlTableModel).
+// UI layer to the business/data layer (Database + QSqlRelationalTableModel).
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -23,5 +23,5 @@ private:
     void loadDatabase();
 
     QTableView *m_tableView = nullptr;
-    QSqlTableModel *m_model = nullptr;
+    QSqlRelationalTableModel *m_model = nullptr;
 };

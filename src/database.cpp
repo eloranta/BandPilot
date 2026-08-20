@@ -25,7 +25,6 @@ struct SeedContact
     QString frequency;
     QString mode;
     QString submode;
-    QString country;
     int dxccEntity;
     QString grid;
 };
@@ -35,14 +34,14 @@ struct SeedContact
 QVector<SeedContact> seedTemplate()
 {
     return {
-        {"W1AW",   "20m", "14.074", "FT8", "",    "United States", 291, "FN31pr"},
-        {"G4XYZ",  "40m", "7.074",  "FT8", "",    "England",       223, "IO91wm"},
-        {"JA1ABC", "15m", "21.074", "FT8", "",    "Japan",         339, "PM95tp"},
-        {"VK2DEF", "10m", "28.450", "SSB", "USB", "Australia",     150, "QF56od"},
-        {"DL3GHI", "80m", "3.573",  "FT4", "",    "Germany",       230, "JO50cp"},
-        {"OH2JKL", "17m", "18.100", "CW",  "",    "Finland",       224, "KP20eq"},
-        {"PY2MNO", "12m", "24.910", "SSB", "USB", "Brazil",        108, "GG66ff"},
-        {"ZS6PQR", "6m",  "50.313", "FT8", "",    "South Africa",  462, "KG44dc"},
+        {"W1AW",   "20m", "14.074", "FT8", "",    291, "FN31pr"},
+        {"G4XYZ",  "40m", "7.074",  "FT8", "",    223, "IO91wm"},
+        {"JA1ABC", "15m", "21.074", "FT8", "",    339, "PM95tp"},
+        {"VK2DEF", "10m", "28.450", "SSB", "USB", 150, "QF56od"},
+        {"DL3GHI", "80m", "3.573",  "FT4", "",    230, "JO50cp"},
+        {"OH2JKL", "17m", "18.100", "CW",  "",    224, "KP20eq"},
+        {"PY2MNO", "12m", "24.910", "SSB", "USB", 108, "GG66ff"},
+        {"ZS6PQR", "6m",  "50.313", "FT8", "",    462, "KG44dc"},
     };
 }
 
@@ -59,7 +58,6 @@ bool createContactsTable(QString *errorMessage)
         "  frequency TEXT NOT NULL,"
         "  mode TEXT NOT NULL,"
         "  submode TEXT,"
-        "  country TEXT,"
         "  dxcc_entity INTEGER CHECK (dxcc_entity IS NULL OR (dxcc_entity BETWEEN 1 AND 999)),"
         "  deleted_entity TEXT DEFAULT '',"
         "  grid TEXT,"
@@ -100,8 +98,8 @@ bool seedIfEmpty(QString *errorMessage)
     QSqlQuery query(db);
     query.prepare(
         "INSERT INTO contacts "
-        "(date, time, call, band, frequency, mode, submode, country, dxcc_entity, grid, rst_tx, rst_rx, qsl) "
-        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :country, :dxcc_entity, :grid, :rst_tx, :rst_rx, :qsl)");
+        "(date, time, call, band, frequency, mode, submode, dxcc_entity, grid, rst_tx, rst_rx, qsl) "
+        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :dxcc_entity, :grid, :rst_tx, :rst_rx, :qsl)");
 
     const QVector<SeedContact> rows = seedTemplate();
     QDate date = QDate::currentDate().addDays(-rows.size());
@@ -118,7 +116,6 @@ bool seedIfEmpty(QString *errorMessage)
         query.bindValue(":frequency", row.frequency);
         query.bindValue(":mode", row.mode);
         query.bindValue(":submode", row.submode);
-        query.bindValue(":country", row.country);
         query.bindValue(":dxcc_entity", row.dxccEntity);
         query.bindValue(":grid", row.grid);
         query.bindValue(":rst_tx", "59");
