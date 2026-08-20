@@ -20,7 +20,6 @@ qt_add_executable(BandPilot
     src/mainwindow.cpp
     src/database.h
     src/database.cpp
-    src/dxcc_entities.h
 )
 
 target_include_directories(BandPilot PRIVATE src)
@@ -33,6 +32,15 @@ target_link_libraries(BandPilot PRIVATE
 set_target_properties(BandPilot PROPERTIES
     WIN32_EXECUTABLE ON
 )
+
+# Ship the DXCC entity seed data next to the executable; Database::initialize()
+# copies it into the app data directory (alongside the SQLite database) the
+# first time the app runs.
+add_custom_command(TARGET BandPilot POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/resources/dxcc-entities.txt"
+        "$<TARGET_FILE_DIR:BandPilot>/dxcc-entities.txt"
+    COMMENT "Copying dxcc-entities.txt next to the executable")
 
 # Copy the Qt runtime DLLs next to the executable on Windows so it can be
 # run/debugged straight from the build directory.

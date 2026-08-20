@@ -1,20 +1,29 @@
 #include "database.h"
 
-#include "dxcc_entities.h"
-
+#include <QCoreApplication>
 #include <QDate>
 #include <QDir>
+#include <QFile>
 #include <QRandomGenerator>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
+#include <QTextStream>
 #include <QTime>
 #include <QVector>
 
 namespace {
 
 const char *const kConnectionName = "bandpilot_connection";
+const char *const kDxccEntitiesFileName = "dxcc-entities.txt";
+
+// One seed row parsed from dxcc-entities.txt ("<code>|<name>" per line).
+struct DxccEntitySeed
+{
+    int code;
+    QString name;
+};
 
 // A handful of plausible sample QSOs used to seed an empty database so the
 // UI has something to show on first run.
@@ -139,6 +148,68 @@ bool seedIfEmpty(QString *errorMessage)
     return true;
 }
 
+// Path to the DXCC entity seed file, kept alongside the database file.
+QString dxccEntitiesFilePath()
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(dir);
+    return dir + QStringLiteral("/") + QString::fromLatin1(kDxccEntitiesFileName);
+}
+
+// Copies the bundled dxcc-entities.txt (shipped next to the executable) to
+// the app data directory the first time the app runs, so it lives alongside
+// the database file it seeds.
+bool ensureDxccEntitiesFile(QString *errorMessage)
+{
+    const QString destPath = dxccEntitiesFilePath();
+    if (QFile::exists(destPath))
+        return true;
+
+    const QString bundledPath = QCoreApplication::applicationDirPath() + QStringLiteral("/")
+        + QString::fromLatin1(kDxccEntitiesFileName);
+    if (!QFile::exists(bundledPath)) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Missing bundled %1").arg(bundledPath);
+        return false;
+    }
+
+    if (!QFile::copy(bundledPath, destPath)) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Failed to copy %1 to %2").arg(bundledPath, destPath);
+        return false;
+    }
+
+    return true;
+}
+
+// Parses "<code>|<name>" lines from dxcc-entities.txt.
+bool loadDxccEntities(const QString &path, QVector<DxccEntitySeed> *entities, QString *errorMessage)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        if (errorMessage)
+            *errorMessage = file.errorString();
+        return false;
+    }
+
+    QTextStream in(&file);
+    while (!in.atEnd()) {
+        const QString line = in.readLine();
+        if (line.isEmpty())
+            continue;
+
+        const int sep = line.indexOf(QLatin1Char('|'));
+        bool ok = false;
+        const int code = sep >= 0 ? line.left(sep).toInt(&ok) : 0;
+        if (!ok)
+            continue;
+
+        entities->append({code, line.mid(sep + 1)});
+    }
+
+    return true;
+}
+
 bool createDxccEntityTable(QString *errorMessage)
 {
     QSqlQuery query(QSqlDatabase::database(kConnectionName));
@@ -169,6 +240,13 @@ bool seedDxccEntityIfEmpty(QString *errorMessage)
     if (count != 0)
         return count >= 0; // already has data, or the COUNT query itself failed above
 
+    if (!ensureDxccEntitiesFile(errorMessage))
+        return false;
+
+    QVector<DxccEntitySeed> entities;
+    if (!loadDxccEntities(dxccEntitiesFilePath(), &entities, errorMessage))
+        return false;
+
     QSqlDatabase db = QSqlDatabase::database(kConnectionName);
     if (!db.transaction()) {
         if (errorMessage)
@@ -179,9 +257,9 @@ bool seedDxccEntityIfEmpty(QString *errorMessage)
     QSqlQuery query(db);
     query.prepare("INSERT INTO dxcc_entity (entity_code, entity) VALUES (:code, :entity)");
 
-    for (const DxccEntitySeed &row : kDxccEntities) {
+    for (const DxccEntitySeed &row : entities) {
         query.bindValue(":code", row.code);
-        query.bindValue(":entity", QString::fromUtf8(row.name));
+        query.bindValue(":entity", row.name);
 
         if (!query.exec()) {
             if (errorMessage)
