@@ -2,6 +2,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QFileDialog>
 #include <QHeaderView>
 #include <QMenu>
 #include <QMenuBar>
@@ -39,6 +40,13 @@ void MainWindow::setupUi()
 void MainWindow::setupMenuBar()
 {
     QMenu *fileMenu = menuBar()->addMenu(tr("&File"));
+
+    QMenu *importMenu = fileMenu->addMenu(tr("&Import"));
+    QAction *importAdifAction = importMenu->addAction(tr("&Adif..."));
+    connect(importAdifAction, &QAction::triggered, this, &MainWindow::importAdif);
+
+    fileMenu->addSeparator();
+
     QAction *quitAction = fileMenu->addAction(tr("&Quit"));
     quitAction->setShortcut(QKeySequence::Quit);
     connect(quitAction, &QAction::triggered, qApp, &QApplication::quit);
@@ -100,4 +108,22 @@ void MainWindow::loadDatabase()
         tr("Database ready: %1 (%2 contacts)")
             .arg(Database::databaseFilePath())
             .arg(m_model->rowCount()));
+}
+
+void MainWindow::importAdif()
+{
+    const QString filePath = QFileDialog::getOpenFileName(
+        this, tr("Import ADIF Log"), QString(), tr("ADIF files (*.adi *.adif);;All files (*)"));
+    if (filePath.isEmpty())
+        return;
+
+    QString errorMessage;
+    const int imported = Database::importAdif(filePath, &errorMessage);
+    if (imported < 0) {
+        statusBar()->showMessage(tr("ADIF import failed: %1").arg(errorMessage));
+        return;
+    }
+
+    m_model->select();
+    statusBar()->showMessage(tr("Imported %1 contact(s) from %2").arg(imported).arg(filePath));
 }

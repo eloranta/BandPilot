@@ -3,11 +3,13 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QMap>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QTextStream>
+#include <QVariant>
 #include <QVector>
 
 namespace {
@@ -48,6 +50,68 @@ bool createContactsTable(QString *errorMessage)
         *errorMessage = query.lastError().text();
 
     return ok;
+}
+
+// One <eor>-delimited QSO record from an ADIF file: lower-cased field name
+// (e.g. "qso_date") to its raw value.
+using AdifRecord = QMap<QString, QString>;
+
+// ADIF data fields are declared as "<name:length[:type]>" followed by
+// exactly `length` bytes of value, so records are parsed by that explicit
+// length rather than by scanning for the next '<' (a value may legally
+// contain '<' or ':'). Anything before the header terminator (<eoh>), i.e.
+// the header fields themselves, is skipped since it describes the exporting
+// program rather than a QSO.
+QVector<AdifRecord> parseAdifRecords(const QString &content)
+{
+    QVector<AdifRecord> records;
+
+    const int headerEnd = content.indexOf(QStringLiteral("<eoh>"), 0, Qt::CaseInsensitive);
+    int i = headerEnd >= 0 ? headerEnd + 5 : 0;
+
+    AdifRecord current;
+    while (i < content.size()) {
+        const int lt = content.indexOf(QLatin1Char('<'), i);
+        if (lt < 0)
+            break;
+        const int gt = content.indexOf(QLatin1Char('>'), lt);
+        if (gt < 0)
+            break;
+
+        const QStringList parts = content.mid(lt + 1, gt - lt - 1).split(QLatin1Char(':'));
+        const QString name = parts.value(0).trimmed().toLower();
+        i = gt + 1;
+
+        if (name == QLatin1String("eor")) {
+            records.append(current);
+            current = AdifRecord();
+            continue;
+        }
+
+        bool ok = false;
+        const int len = parts.value(1).toInt(&ok);
+        if (!ok || len < 0)
+            continue; // not a data field (e.g. stray/unrecognized tag)
+
+        current.insert(name, content.mid(i, len));
+        i += len;
+    }
+
+    return records;
+}
+
+QString adifDateToIso(const QString &value)
+{
+    if (value.size() != 8)
+        return QString();
+    return value.left(4) + QLatin1Char('-') + value.mid(4, 2) + QLatin1Char('-') + value.mid(6, 2);
+}
+
+QString adifTimeToHm(const QString &value)
+{
+    if (value.size() < 4)
+        return QString();
+    return value.left(2) + QLatin1Char(':') + value.mid(2, 2);
 }
 
 // Path to the DXCC entity seed file, kept alongside the database file.
@@ -217,6 +281,78 @@ bool initialize(QString *errorMessage)
         return false;
 
     return true;
+}
+
+int importAdif(const QString &filePath, QString *errorMessage)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        if (errorMessage)
+            *errorMessage = file.errorString();
+        return -1;
+    }
+    const QString content = QString::fromUtf8(file.readAll());
+    file.close();
+
+    const QVector<AdifRecord> records = parseAdifRecords(content);
+
+    QSqlDatabase db = QSqlDatabase::database(kConnectionName);
+    if (!db.transaction()) {
+        if (errorMessage)
+            *errorMessage = db.lastError().text();
+        return -1;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(
+        "INSERT INTO contacts "
+        "(date, time, call, band, frequency, mode, submode, dxcc_entity, grid, rst_tx, rst_rx, qsl, comment) "
+        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :dxcc_entity, :grid, :rst_tx, :rst_rx, :qsl, :comment)");
+
+    int imported = 0;
+    for (const AdifRecord &record : records) {
+        const QString call = record.value(QStringLiteral("call"));
+        const QString date = adifDateToIso(record.value(QStringLiteral("qso_date")));
+        const QString time = adifTimeToHm(record.value(QStringLiteral("time_on")));
+        if (call.isEmpty() || date.isEmpty() || time.isEmpty())
+            continue; // not enough to log a QSO; skip malformed/incomplete record
+
+        query.bindValue(":date", date);
+        query.bindValue(":time", time);
+        query.bindValue(":call", call);
+        query.bindValue(":band", record.value(QStringLiteral("band")));
+        query.bindValue(":frequency", record.value(QStringLiteral("freq")));
+        query.bindValue(":mode", record.value(QStringLiteral("mode")));
+        query.bindValue(":submode", record.value(QStringLiteral("submode")));
+        query.bindValue(":grid", record.value(QStringLiteral("gridsquare")));
+        query.bindValue(":rst_tx", record.value(QStringLiteral("rst_sent")));
+        query.bindValue(":rst_rx", record.value(QStringLiteral("rst_rcvd")));
+        query.bindValue(":qsl", record.value(QStringLiteral("qsl_rcvd")));
+        query.bindValue(":comment", record.contains(QStringLiteral("comment"))
+                                         ? record.value(QStringLiteral("comment"))
+                                         : record.value(QStringLiteral("notes")));
+
+        bool dxccOk = false;
+        const int dxccCode = record.value(QStringLiteral("dxcc")).toInt(&dxccOk);
+        query.bindValue(":dxcc_entity",
+                         dxccOk && dxccCode >= 1 && dxccCode <= 999 ? QVariant(dxccCode) : QVariant());
+
+        if (!query.exec()) {
+            if (errorMessage)
+                *errorMessage = query.lastError().text();
+            db.rollback();
+            return -1;
+        }
+        ++imported;
+    }
+
+    if (!db.commit()) {
+        if (errorMessage)
+            *errorMessage = db.lastError().text();
+        return -1;
+    }
+
+    return imported;
 }
 
 } // namespace Database

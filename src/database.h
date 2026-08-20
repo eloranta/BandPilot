@@ -25,4 +25,10 @@ QString connectionName();
 // Full path to the SQLite database file on disk.
 QString databaseFilePath();
 
+// Parses an ADIF (.adi/.adif) log file and inserts each QSO record found in
+// it into the "contacts" table. Returns the number of contacts imported, or
+// -1 on failure (with *errorMessage, if non-null, set to a human-readable
+// description). Records missing a callsign, date, or time are skipped.
+int importAdif(const QString &filePath, QString *errorMessage = nullptr);
+
 } // namespace Database

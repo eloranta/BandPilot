@@ -21,6 +21,7 @@ private:
     void setupUi();
     void setupMenuBar();
     void loadDatabase();
+    void importAdif();
 
     QTableView *m_tableView = nullptr;
     QSqlRelationalTableModel *m_model = nullptr;
