@@ -101,21 +101,25 @@ void MainWindow::setupUi()
     connect(m_tableView, &QTableView::customContextMenuRequested, this,
             &MainWindow::showTableContextMenu);
 
-    const QStringList &rowNames = Database::dxccChallengeRowNames();
-    const QStringList &bandNames = Database::dxccChallengeBandNames();
+    // One row per single-mode award (Mixed/CW/Phone/Digital/Satellite),
+    // one row per single-band award (160m..70cm), and a final DXCC
+    // Challenge row -- mirrors the layout of LoTW's own "DXCC Award
+    // Account Status" page, with a single "DXCC Credits" column since
+    // (unlike that page) this app only knows LoTW-confirmed vs. not, not
+    // ARRL's separate new/in-process/granted award-application states.
+    QStringList awardNames = Database::dxccChallengeRowNames() + Database::dxccChallengeBandNames();
+    awardNames << tr("Challenge");
 
-    m_dxccChallengeTable = new QTableWidget(rowNames.size(), bandNames.size() + 1, this);
-    m_dxccChallengeTable->setVerticalHeaderLabels(rowNames);
-    m_dxccChallengeTable->setHorizontalHeaderLabels(QStringList(bandNames) << tr("Challenge"));
+    m_dxccChallengeTable = new QTableWidget(awardNames.size(), 1, this);
+    m_dxccChallengeTable->setVerticalHeaderLabels(awardNames);
+    m_dxccChallengeTable->setHorizontalHeaderLabels({tr("DXCC Credits")});
     m_dxccChallengeTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_dxccChallengeTable->setSelectionMode(QAbstractItemView::NoSelection);
     m_dxccChallengeTable->horizontalHeader()->setStretchLastSection(true);
-    for (int row = 0; row < rowNames.size(); ++row) {
-        for (int col = 0; col <= bandNames.size(); ++col) {
-            auto *item = new QTableWidgetItem;
-            item->setTextAlignment(Qt::AlignCenter);
-            m_dxccChallengeTable->setItem(row, col, item);
-        }
+    for (int row = 0; row < awardNames.size(); ++row) {
+        auto *item = new QTableWidgetItem;
+        item->setTextAlignment(Qt::AlignCenter);
+        m_dxccChallengeTable->setItem(row, 0, item);
     }
 
     m_tabWidget = new QTabWidget(this);
@@ -365,21 +369,19 @@ void MainWindow::updateStats()
                                    .arg(stats.entitiesWorked));
     }
 
-    Database::DxccChallengeMatrix matrix;
-    QString matrixError;
-    if (!Database::dxccChallengeMatrix(&matrix, &matrixError)) {
-        qWarning() << "Failed to compute DXCC Challenge matrix:" << matrixError;
+    Database::DxccAwardCredits credits;
+    QString creditsError;
+    if (!Database::dxccAwardCredits(&credits, &creditsError)) {
+        qWarning() << "Failed to compute DXCC award credits:" << creditsError;
         return;
     }
 
-    const auto cellText = [](int count) {
-        return count > 0 ? QString::number(count) : QString();
-    };
-    const int rowCount = Database::dxccChallengeRowNames().size();
-    const int bandCount = Database::dxccChallengeBandNames().size();
-    for (int row = 0; row < rowCount; ++row) {
-        for (int col = 0; col < bandCount; ++col)
-            m_dxccChallengeTable->item(row, col)->setText(cellText(matrix.counts[row][col]));
-        m_dxccChallengeTable->item(row, bandCount)->setText(cellText(matrix.challenge[row]));
-    }
+    // Row order matches setupUi()'s awardNames: mode awards, then band
+    // awards, then Challenge.
+    int row = 0;
+    for (int mode : credits.modeCredits)
+        m_dxccChallengeTable->item(row++, 0)->setText(QString::number(mode));
+    for (int band : credits.bandCredits)
+        m_dxccChallengeTable->item(row++, 0)->setText(QString::number(band));
+    m_dxccChallengeTable->item(row, 0)->setText(QString::number(credits.challengeCredits));
 }

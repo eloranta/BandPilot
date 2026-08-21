@@ -85,35 +85,47 @@ struct ContactStats
 // *errorMessage set).
 bool contactStats(ContactStats *stats, QString *errorMessage = nullptr);
 
-// Row (mode-category) and column (band) labels for dxccChallengeMatrix(),
-// in display order. "Satellite" is classified by ADIF PROP_MODE = "SAT"
-// (not by the QSO's actual modulation), and its QSOs are excluded from
-// CW/Phone/Digital -- a satellite contact is its own DXCC award category,
+// Mode-category and band labels for dxccAwardCredits(), in display order.
+// Mirrors ARRL's own separate single-band and single-mode DXCC awards (as
+// shown on LoTW's "DXCC Award Account Status" page), each with its own
+// independent credit count. "Satellite" is classified by ADIF PROP_MODE =
+// "SAT" (not by the QSO's actual modulation), and its QSOs are excluded
+// from CW/Phone/Digital -- a satellite contact is its own award category,
 // not also a CW/Phone/Digital one. "Mixed" places no mode restriction at
-// all, so it's the union across every other row.
+// all, so it's the union across every other mode category.
 constexpr int kDxccChallengeRowCount = 5; // Mixed, CW, Phone, Digital, Satellite
 constexpr int kDxccChallengeBandCount = 12; // 160m through 70cm
 
 const QStringList &dxccChallengeRowNames();
 const QStringList &dxccChallengeBandNames();
 
-// Distinct-DXCC-entity-confirmed counts, one row per mode category and one
-// column per band (see dxccChallengeRowNames()/dxccChallengeBandNames()),
-// plus a per-row "challenge" total: the count of distinct (entity, band)
-// slots confirmed in that mode category, where a satellite QSO occupies a
-// slot of its own (labeled "SAT") alongside the 12 tracked bands rather
-// than the literal band it used. challenge[0] (the Mixed row) is the
-// overall DXCC Challenge total across every mode.
-struct DxccChallengeMatrix
+// Distinct-DXCC-entities-confirmed credit counts for each single-mode
+// award (modeCredits, any band) and each single-band award (bandCredits,
+// any mode), plus the DXCC Challenge credit: the count of distinct
+// (entity, band) slots confirmed across any mode, where a satellite QSO
+// occupies a slot of its own ("SAT") alongside the 12 tracked bands rather
+// than the literal band it used.
+//
+// This is a simplified, locally-computed stand-in for LoTW's own DXCC
+// Award Account Status page: that page additionally tracks ARRL's DXCC
+// award *application* workflow (new/unsubmitted QSLs vs. QSLs submitted
+// and awaiting processing vs. credit already granted), which isn't data
+// this app has -- we only know whether a QSO is LoTW-confirmed, not
+// whether its credit has been applied for or granted. Every count here is
+// simply "distinct entities confirmed," which lines up with LoTW's own
+// "DXCC Credits Awarded" column once everything confirmed has also been
+// submitted and granted.
+struct DxccAwardCredits
 {
-    int counts[kDxccChallengeRowCount][kDxccChallengeBandCount] = {};
-    int challenge[kDxccChallengeRowCount] = {};
+    int modeCredits[kDxccChallengeRowCount] = {};
+    int bandCredits[kDxccChallengeBandCount] = {};
+    int challengeCredits = 0;
 };
 
-// Computes dxccChallengeMatrix() over the "contacts" table on
+// Computes dxccAwardCredits() over the "contacts" table on
 // connectionName()'s database connection. Returns false only on a database
 // error (with *errorMessage set).
-bool dxccChallengeMatrix(DxccChallengeMatrix *matrix, QString *errorMessage = nullptr);
+bool dxccAwardCredits(DxccAwardCredits *credits, QString *errorMessage = nullptr);
 
 // Exposed for testing: resolves a callsign to a dxcc_entity.entity_code via
 // cty.dat and the "dxcc_entity" table already seeded on connectionName()'s

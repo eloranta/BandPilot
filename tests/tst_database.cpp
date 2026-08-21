@@ -29,7 +29,7 @@ private slots:
     void vietnamResolves();
     void cocosIslandsResolveDistinctly();
 
-    void dxccChallengeMatrixClassifiesModesAndBands();
+    void dxccAwardCreditsClassifiesModesAndBands();
 
     void importLotwAdifSkipsDuplicates();
     void importLotwAdifToleratesMissingFields();
@@ -263,7 +263,7 @@ void TstDatabase::importLotwAdifToleratesMissingFields()
              qPrintable(cleanup.lastError().text()));
 }
 
-void TstDatabase::dxccChallengeMatrixClassifiesModesAndBands()
+void TstDatabase::dxccAwardCreditsClassifiesModesAndBands()
 {
     QSqlDatabase db = QSqlDatabase::database(Database::connectionName());
     QSqlQuery insert(db);
@@ -305,9 +305,9 @@ void TstDatabase::dxccChallengeMatrixClassifiesModesAndBands()
         QVERIFY2(insert.exec(), qPrintable(insert.lastError().text()));
     }
 
-    Database::DxccChallengeMatrix matrix;
+    Database::DxccAwardCredits credits;
     QString errorMessage;
-    QVERIFY2(Database::dxccChallengeMatrix(&matrix, &errorMessage), qPrintable(errorMessage));
+    QVERIFY2(Database::dxccAwardCredits(&credits, &errorMessage), qPrintable(errorMessage));
 
     const QStringList &rowNames = Database::dxccChallengeRowNames();
     const QStringList &bandNames = Database::dxccChallengeBandNames();
@@ -320,19 +320,23 @@ void TstDatabase::dxccChallengeMatrixClassifiesModesAndBands()
     const int band2m = bandNames.indexOf(QStringLiteral("2M"));
     const int band10m = bandNames.indexOf(QStringLiteral("10M"));
 
-    QCOMPARE(matrix.counts[mixedRow][band20m], 1); // entity 1, both CW and SSB -- one entity
-    QCOMPARE(matrix.counts[mixedRow][band40m], 1);
-    QCOMPARE(matrix.counts[cwRow][band20m], 1);
-    QCOMPARE(matrix.counts[phoneRow][band20m], 1); // entity 1's SSB QSO
-    QCOMPARE(matrix.counts[satelliteRow][band2m], 1); // entity 6 via satellite
-    QCOMPARE(matrix.counts[phoneRow][band2m], 0); // NOT phone, despite FM mode -- it's satellite
-    QCOMPARE(matrix.counts[mixedRow][band10m], 0); // entity 6's 10M QSO was unconfirmed
+    // Mode credits (any band): entity 1 confirmed via both CW and SSB, so
+    // it's exactly one Mixed credit -- not two.
+    QCOMPARE(credits.modeCredits[mixedRow], 2); // entity 1, entity 6
+    QCOMPARE(credits.modeCredits[cwRow], 1); // entity 1 (CW)
+    QCOMPARE(credits.modeCredits[phoneRow], 1); // entity 1 (SSB)
+    QCOMPARE(credits.modeCredits[satelliteRow], 1); // entity 6, via satellite only
+
+    // Band credits (any mode): entity 6's 2M QSO landing under Satellite
+    // must not also inflate the Phone mode credit above.
+    QCOMPARE(credits.bandCredits[band20m], 1); // entity 1
+    QCOMPARE(credits.bandCredits[band40m], 1); // entity 1
+    QCOMPARE(credits.bandCredits[band2m], 1); // entity 6, satellite QSO still counts for the 2M band credit
+    QCOMPARE(credits.bandCredits[band10m], 0); // entity 6's 10M QSO was unconfirmed
 
     // Challenge: entity 1 occupies 20M and 40M (2 slots, CW+SSB on 20M
     // collapse into one slot); entity 6 occupies one "SAT" slot -- 3 total.
-    QCOMPARE(matrix.challenge[mixedRow], 3);
-    QCOMPARE(matrix.challenge[cwRow], 2); // entity 1: 20M, 40M
-    QCOMPARE(matrix.challenge[satelliteRow], 1); // entity 6: SAT
+    QCOMPARE(credits.challengeCredits, 3);
 
     QSqlQuery cleanup(db);
     QVERIFY2(cleanup.exec(QStringLiteral("DELETE FROM contacts WHERE call IN ('VE1AAA', 'KL7BBB')")),

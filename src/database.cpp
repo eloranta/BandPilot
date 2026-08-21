@@ -840,7 +840,7 @@ const QStringList &dxccChallengeBandNames()
     return names;
 }
 
-bool dxccChallengeMatrix(DxccChallengeMatrix *matrix, QString *errorMessage)
+bool dxccAwardCredits(DxccAwardCredits *credits, QString *errorMessage)
 {
     QSqlDatabase db = QSqlDatabase::database(kConnectionName);
     QSqlQuery query(db);
@@ -860,14 +860,9 @@ bool dxccChallengeMatrix(DxccChallengeMatrix *matrix, QString *errorMessage)
 
     const QStringList &bandNames = dxccChallengeBandNames();
 
-    QSet<int> cellEntities[kDxccChallengeRowCount][kDxccChallengeBandCount];
-    QSet<QString> challengeSlots[kDxccChallengeRowCount];
-
-    const auto recordSlot = [&](int row, int entity, int bandIndex, const QString &slotKey) {
-        if (bandIndex >= 0)
-            cellEntities[row][bandIndex].insert(entity);
-        challengeSlots[row].insert(QString::number(entity) + QLatin1Char('|') + slotKey);
-    };
+    QSet<int> modeEntities[kDxccChallengeRowCount];
+    QSet<int> bandEntities[kDxccChallengeBandCount];
+    QSet<QString> challengeSlots;
 
     while (query.next()) {
         const int entity = query.value(0).toInt();
@@ -877,15 +872,19 @@ bool dxccChallengeMatrix(DxccChallengeMatrix *matrix, QString *errorMessage)
         const bool isSatellite = propMode == QStringLiteral("SAT");
 
         const int bandIndex = bandNames.indexOf(band);
-        // A satellite QSO occupies its own Challenge slot ("SAT") rather
-        // than the literal band it used, per BandPilot's Challenge total
-        // counting every tracked band plus satellite as separate slots.
-        const QString slotKey = isSatellite ? QStringLiteral("SAT") : band;
+        if (bandIndex >= 0)
+            bandEntities[bandIndex].insert(entity);
 
-        recordSlot(0, entity, bandIndex, slotKey); // Mixed: no mode restriction
+        modeEntities[0].insert(entity); // Mixed: no mode restriction
+
+        // The Challenge award counts distinct (entity, band) slots across
+        // any mode; a satellite QSO occupies a slot of its own ("SAT")
+        // rather than the literal band it used.
+        challengeSlots.insert(QString::number(entity) + QLatin1Char('|')
+                               + (isSatellite ? QStringLiteral("SAT") : band));
 
         if (isSatellite) {
-            recordSlot(4, entity, bandIndex, slotKey); // Satellite
+            modeEntities[4].insert(entity); // Satellite
             continue; // a satellite QSO isn't also a CW/Phone/Digital one
         }
 
@@ -897,15 +896,15 @@ bool dxccChallengeMatrix(DxccChallengeMatrix *matrix, QString *errorMessage)
                 row = 2;
             else
                 row = 3; // Digital: everything else (RTTY, PSK31, FT8, FT4, ...)
-            recordSlot(row, entity, bandIndex, slotKey);
+            modeEntities[row].insert(entity);
         }
     }
 
-    for (int row = 0; row < kDxccChallengeRowCount; ++row) {
-        for (int col = 0; col < kDxccChallengeBandCount; ++col)
-            matrix->counts[row][col] = cellEntities[row][col].size();
-        matrix->challenge[row] = challengeSlots[row].size();
-    }
+    for (int row = 0; row < kDxccChallengeRowCount; ++row)
+        credits->modeCredits[row] = modeEntities[row].size();
+    for (int col = 0; col < kDxccChallengeBandCount; ++col)
+        credits->bandCredits[col] = bandEntities[col].size();
+    credits->challengeCredits = challengeSlots.size();
 
     return true;
 }
