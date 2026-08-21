@@ -39,9 +39,10 @@ BandPilot/
 │   ├── main.cpp        # entry point
 │   ├── version.h        # single source of truth for the version shown in the title bar
 │   ├── mainwindow.h/.cpp # UI layer: menu bar, QTableView, status bar
-│   └── database.h/.cpp   # data layer: SQLite open/create/seed
-├── resources/            # icons, .qrc (empty for now)
-└── tests/                # reserved for later (no test framework wired up yet)
+│   ├── database.h/.cpp   # data layer: SQLite open/create/seed, ADIF import
+│   └── cty.h/.cpp        # cty.dat (callsign -> DXCC country) parsing/lookup
+├── resources/            # dxcc-entities.txt seed data, icons/.qrc (icons TBD)
+└── tests/                # Qt Test unit tests (tst_cty.cpp), run via ctest
 ```
 
 ## Known deviation from spec

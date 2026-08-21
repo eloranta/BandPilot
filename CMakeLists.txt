@@ -9,7 +9,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Sql)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Sql Test)
 
 qt_standard_project_setup()
 
@@ -53,4 +53,9 @@ if(WIN32)
             COMMAND "${WINDEPLOYQT_EXECUTABLE}" "$<TARGET_FILE:BandPilot>"
             COMMENT "Running windeployqt")
     endif()
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
 endif()
