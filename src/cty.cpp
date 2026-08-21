@@ -2,6 +2,7 @@
 
 #include <QFile>
 #include <QMap>
+#include <QSet>
 #include <QStringList>
 
 namespace {
@@ -51,6 +52,20 @@ QString bareAlias(QString alias)
     }
     alias.truncate(cut);
     return alias;
+}
+
+// Longest-prefix lookup against prefixMap() only (no exact-callsign
+// overrides -- those only ever apply to a full literal callsign, never to
+// a substring of one).
+QString longestPrefixMatch(const QString &token)
+{
+    const QMap<QString, QString> &map = prefixMap();
+    for (int len = token.size(); len > 0; --len) {
+        const auto it = map.constFind(token.left(len));
+        if (it != map.constEnd())
+            return it.value();
+    }
+    return QString();
 }
 
 } // namespace
@@ -121,17 +136,44 @@ QString countryForCallsign(const QString &callsign)
     if (!loadedFlag())
         return QString();
 
+    // An exact-callsign override match on the literal string (which may
+    // itself contain a '/', e.g. "=9M6/LA6VM") always takes precedence,
+    // including over the portable-suffix heuristic below.
     const auto exactIt = exactMap().constFind(callsign);
     if (exactIt != exactMap().constEnd())
         return exactIt.value();
 
-    const QMap<QString, QString> &map = prefixMap();
-    for (int len = callsign.size(); len > 0; --len) {
-        const auto it = map.constFind(callsign.left(len));
-        if (it != map.constEnd())
-            return it.value();
+    // A portable-operation suffix -- e.g. "K6VHF/HR9" for a US ham signing
+    // Honduras -- denotes a DXCC entity change and takes precedence over
+    // the home call's own prefix, unless the suffix is an operating-mode
+    // indicator (mobile, portable, maritime/aeronautical mobile, QRP) or a
+    // bare call-area digit, neither of which changes the country. This is
+    // a heuristic, not exact: a handful of countries (e.g. Nordic special-
+    // activation suffixes like "/LH", "/SA") reuse another country's
+    // prefix letters for a non-country marker; cty.dat resolves those via
+    // curated exact overrides, which are still checked first, above.
+    const int slash = callsign.lastIndexOf(QLatin1Char('/'));
+    if (slash > 0 && slash < callsign.size() - 1) {
+        const QString suffix = callsign.mid(slash + 1);
+        static const QSet<QString> kOperatingModeSuffixes = {
+            QStringLiteral("M"),  QStringLiteral("P"),   QStringLiteral("MM"),
+            QStringLiteral("AM"), QStringLiteral("A"),   QStringLiteral("QRP"),
+        };
+        bool numericSuffix = true;
+        for (const QChar c : suffix) {
+            if (!c.isDigit()) {
+                numericSuffix = false;
+                break;
+            }
+        }
+        if (!numericSuffix && !kOperatingModeSuffixes.contains(suffix)) {
+            const QString suffixCountry = longestPrefixMatch(suffix);
+            if (!suffixCountry.isEmpty())
+                return suffixCountry;
+        }
     }
-    return QString();
+
+    return longestPrefixMatch(callsign);
 }
 
 } // namespace Cty

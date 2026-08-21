@@ -134,6 +134,18 @@ void TstCty::realCtyDatKnownCallsigns()
     // scan that doesn't treat "=" entries as exact-only would wrongly
     // match "KL7A" as a 4-character prefix of "KL7ABC".
     QCOMPARE(Cty::countryForCallsign(QStringLiteral("KL7A")), QStringLiteral("United States"));
+
+    // A US ham (K6VHF) operating portable from Honduras signs "K6VHF/HR9":
+    // the "/HR9" suffix -- not the "K6VHF" home-call prefix -- determines
+    // the DXCC entity for a portable operation like this.
+    QCOMPARE(Cty::countryForCallsign(QStringLiteral("K6VHF/HR9")), QStringLiteral("Honduras"));
+
+    // A curated exact override wins even when its suffix looks like a
+    // portable-country indicator: "OH1BGG/SA" is one of AD1C's own
+    // Finland exceptions (a Finnish special-activation suffix, not a
+    // Sweden operation), and must stay Finland despite "SA" also being a
+    // real Swedish prefix.
+    QCOMPARE(Cty::countryForCallsign(QStringLiteral("OH1BGG/SA")), QStringLiteral("Finland"));
 }
 
 QTEST_APPLESS_MAIN(TstCty)
