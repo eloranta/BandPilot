@@ -30,6 +30,7 @@ private slots:
     void cocosIslandsResolveDistinctly();
 
     void importLotwAdifSkipsDuplicates();
+    void clearAllContactsDeletesEverything();
 };
 
 void TstDatabase::initTestCase()
@@ -201,6 +202,22 @@ void TstDatabase::importLotwAdifSkipsDuplicates()
     QVERIFY2(count.exec(), qPrintable(count.lastError().text()));
     QVERIFY(count.next());
     QCOMPARE(count.value(0).toInt(), 1);
+}
+
+void TstDatabase::clearAllContactsDeletesEverything()
+{
+    // Two contacts (W1AW, K5ABC) are left over from
+    // importLotwAdifSkipsDuplicates() above.
+    QString errorMessage;
+    const int deleted = Database::clearAllContacts(&errorMessage);
+    QCOMPARE(deleted, 2);
+
+    QSqlDatabase db = QSqlDatabase::database(Database::connectionName());
+    QSqlQuery count(db);
+    QVERIFY2(count.exec(QStringLiteral("SELECT COUNT(*) FROM contacts")),
+             qPrintable(count.lastError().text()));
+    QVERIFY(count.next());
+    QCOMPARE(count.value(0).toInt(), 0);
 }
 
 QTEST_GUILESS_MAIN(TstDatabase)

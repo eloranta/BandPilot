@@ -61,6 +61,12 @@ QUrl lotwReportUrl(const QString &login, const QString &password, const QString 
 // result->imported == 0.
 bool importLotwAdif(const QByteArray &data, AdifImportResult *result, QString *errorMessage = nullptr);
 
+// Permanently deletes every row from "contacts". Returns the number of
+// contacts deleted, or -1 on failure (with *errorMessage, if non-null, set
+// to a human-readable description). Callers are responsible for confirming
+// this with the user first -- it does not ask.
+int clearAllContacts(QString *errorMessage = nullptr);
+
 // Exposed for testing: resolves a callsign to a dxcc_entity.entity_code via
 // cty.dat and the "dxcc_entity" table already seeded on connectionName()'s
 // database connection -- the same lookup importAdif() uses internally to

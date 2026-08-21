@@ -703,4 +703,38 @@ bool importLotwAdif(const QByteArray &data, AdifImportResult *result, QString *e
     return importAdifRecords(records, /*deduplicate=*/true, result, errorMessage);
 }
 
+int clearAllContacts(QString *errorMessage)
+{
+    QSqlDatabase db = QSqlDatabase::database(kConnectionName);
+    if (!db.transaction()) {
+        if (errorMessage)
+            *errorMessage = db.lastError().text();
+        return -1;
+    }
+
+    QSqlQuery countQuery(db);
+    if (!countQuery.exec(QStringLiteral("SELECT COUNT(*) FROM contacts")) || !countQuery.next()) {
+        if (errorMessage)
+            *errorMessage = countQuery.lastError().text();
+        db.rollback();
+        return -1;
+    }
+    const int count = countQuery.value(0).toInt();
+
+    QSqlQuery deleteQuery(db);
+    if (!deleteQuery.exec(QStringLiteral("DELETE FROM contacts"))) {
+        if (errorMessage)
+            *errorMessage = deleteQuery.lastError().text();
+        db.rollback();
+        return -1;
+    }
+
+    if (!db.commit()) {
+        if (errorMessage)
+            *errorMessage = db.lastError().text();
+        return -1;
+    }
+    return count;
+}
+
 } // namespace Database

@@ -11,6 +11,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -62,6 +63,9 @@ void MainWindow::setupUi()
     m_tableView->setAlternatingRowColors(true);
     m_tableView->horizontalHeader()->setStretchLastSection(true);
     m_tableView->verticalHeader()->setVisible(false);
+    m_tableView->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_tableView, &QTableView::customContextMenuRequested, this,
+            &MainWindow::showTableContextMenu);
     setCentralWidget(m_tableView);
 
     statusBar()->showMessage(tr("Starting up..."));
@@ -241,4 +245,33 @@ void MainWindow::handleLotwReply(QNetworkReply *reply)
                                   .arg(result.duplicates)
                                   .arg(result.invalid),
                               8000);
+}
+
+void MainWindow::showTableContextMenu(const QPoint &pos)
+{
+    QMenu menu(this);
+    QAction *clearAllAction = menu.addAction(tr("Clear All..."));
+    connect(clearAllAction, &QAction::triggered, this, &MainWindow::clearAllContacts);
+    menu.exec(m_tableView->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::clearAllContacts()
+{
+    const QMessageBox::StandardButton answer = QMessageBox::warning(
+        this, tr("Clear Database"),
+        tr("This will permanently delete all contacts from the database.\n\nContinue?"),
+        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+    if (answer != QMessageBox::Yes)
+        return;
+
+    QString errorMessage;
+    const int deleted = Database::clearAllContacts(&errorMessage);
+    if (deleted < 0) {
+        statusBar()->showMessage(tr("Clear database failed: %1").arg(errorMessage), 8000);
+        return;
+    }
+
+    m_model->select();
+    m_tableView->resizeColumnsToContents();
+    statusBar()->showMessage(tr("Cleared %1 contact(s)").arg(deleted), 5000);
 }

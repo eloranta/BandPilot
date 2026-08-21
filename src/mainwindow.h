@@ -26,6 +26,8 @@ private:
     void importAdif();
     void importLotw();
     void handleLotwReply(QNetworkReply *reply);
+    void showTableContextMenu(const QPoint &pos);
+    void clearAllContacts();
 
     QTableView *m_tableView = nullptr;
     QSqlRelationalTableModel *m_model = nullptr;
