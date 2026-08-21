@@ -31,4 +31,12 @@ QString databaseFilePath();
 // description). Records missing a callsign, date, or time are skipped.
 int importAdif(const QString &filePath, QString *errorMessage = nullptr);
 
+// Exposed for testing: resolves a callsign to a dxcc_entity.entity_code via
+// cty.dat and the "dxcc_entity" table already seeded on connectionName()'s
+// database connection -- the same lookup importAdif() uses internally to
+// fill in a QSO's DXCC entity. Returns -1 if cty.dat isn't loaded, the
+// callsign matches no prefix, or the matched country name doesn't
+// correlate to a known entity.
+int dxccEntityCodeForCallsign(const QString &callsign);
+
 } // namespace Database

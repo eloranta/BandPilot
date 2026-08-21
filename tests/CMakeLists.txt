@@ -22,3 +22,27 @@ if(WIN32 AND WINDEPLOYQT_EXECUTABLE)
         COMMAND "${WINDEPLOYQT_EXECUTABLE}" "$<TARGET_FILE:tst_cty>"
         COMMENT "Running windeployqt for tst_cty")
 endif()
+
+qt_add_executable(tst_database
+    tst_database.cpp
+    ../src/database.h
+    ../src/database.cpp
+    ../src/cty.h
+    ../src/cty.cpp
+)
+
+target_include_directories(tst_database PRIVATE ../src)
+
+target_link_libraries(tst_database PRIVATE
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+)
+
+add_test(NAME tst_database COMMAND tst_database)
+
+if(WIN32 AND WINDEPLOYQT_EXECUTABLE)
+    add_custom_command(TARGET tst_database POST_BUILD
+        COMMAND "${WINDEPLOYQT_EXECUTABLE}" "$<TARGET_FILE:tst_database>"
+        COMMENT "Running windeployqt for tst_database")
+endif()

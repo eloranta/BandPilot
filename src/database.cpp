@@ -556,6 +556,11 @@ bool initialize(QString *errorMessage)
     return true;
 }
 
+int dxccEntityCodeForCallsign(const QString &callsign)
+{
+    return dxccCodeForCallsign(callsign);
+}
+
 int importAdif(const QString &filePath, QString *errorMessage)
 {
     QFile file(filePath);
