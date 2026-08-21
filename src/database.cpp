@@ -56,13 +56,45 @@ bool createContactsTable(QString *errorMessage)
         "  rst_tx TEXT,"
         "  rst_rx TEXT,"
         "  qsl TEXT,"
-        "  comment TEXT"
+        "  comment TEXT,"
+        "  prop_mode TEXT"
         ")");
 
     if (!ok && errorMessage)
         *errorMessage = query.lastError().text();
 
     return ok;
+}
+
+// Adds the "prop_mode" column (ADIF PROP_MODE, e.g. "SAT" for satellite --
+// used by the DXCC Challenge tab to tell a satellite QSO apart from a
+// terrestrial one on the same band/mode) to a "contacts" table created by
+// an older version of BandPilot, before this column existed. CREATE TABLE
+// IF NOT EXISTS above is a no-op against an existing table, so this
+// migration is what actually adds it for upgraders; a fresh database
+// already has it from createContactsTable() and this becomes a no-op too.
+bool ensureContactsPropModeColumn(QString *errorMessage)
+{
+    QSqlDatabase db = QSqlDatabase::database(kConnectionName);
+    QSqlQuery pragma(db);
+    if (!pragma.exec(QStringLiteral("PRAGMA table_info(contacts)"))) {
+        if (errorMessage)
+            *errorMessage = pragma.lastError().text();
+        return false;
+    }
+
+    while (pragma.next()) {
+        if (pragma.value(1).toString().compare(QStringLiteral("prop_mode"), Qt::CaseInsensitive) == 0)
+            return true; // already present
+    }
+
+    QSqlQuery alter(db);
+    if (!alter.exec(QStringLiteral("ALTER TABLE contacts ADD COLUMN prop_mode TEXT"))) {
+        if (errorMessage)
+            *errorMessage = alter.lastError().text();
+        return false;
+    }
+    return true;
 }
 
 // One <eor>-delimited QSO record from an ADIF file: lower-cased field name
@@ -532,8 +564,8 @@ bool importAdifRecords(const QVector<AdifRecord> &records, bool deduplicate, Dat
     QSqlQuery query(db);
     query.prepare(
         "INSERT INTO contacts "
-        "(date, time, call, band, frequency, mode, submode, dxcc_entity, grid, rst_tx, rst_rx, qsl, comment) "
-        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :dxcc_entity, :grid, :rst_tx, :rst_rx, :qsl, :comment)");
+        "(date, time, call, band, frequency, mode, submode, dxcc_entity, grid, rst_tx, rst_rx, qsl, comment, prop_mode) "
+        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :dxcc_entity, :grid, :rst_tx, :rst_rx, :qsl, :comment, :prop_mode)");
 
     for (const AdifRecord &record : records) {
         const QString call = record.value(QStringLiteral("call"));
@@ -585,6 +617,7 @@ bool importAdifRecords(const QVector<AdifRecord> &records, bool deduplicate, Dat
         query.bindValue(":comment", record.contains(QStringLiteral("comment"))
                                          ? record.value(QStringLiteral("comment"))
                                          : record.value(QStringLiteral("notes")));
+        query.bindValue(":prop_mode", record.value(QStringLiteral("prop_mode")));
 
         bool dxccOk = false;
         int dxccCode = record.value(QStringLiteral("dxcc")).toInt(&dxccOk);
@@ -639,6 +672,9 @@ bool initialize(QString *errorMessage)
     }
 
     if (!createContactsTable(errorMessage))
+        return false;
+
+    if (!ensureContactsPropModeColumn(errorMessage))
         return false;
 
     if (!ensureDxccEntitiesFile(errorMessage))
@@ -742,6 +778,136 @@ int clearAllContacts(QString *errorMessage)
         return -1;
     }
     return count;
+}
+
+bool contactStats(ContactStats *stats, QString *errorMessage)
+{
+    QSqlDatabase db = QSqlDatabase::database(kConnectionName);
+
+    QSqlQuery totalQuery(db);
+    if (!totalQuery.exec(QStringLiteral("SELECT COUNT(*) FROM contacts")) || !totalQuery.next()) {
+        if (errorMessage)
+            *errorMessage = totalQuery.lastError().text();
+        return false;
+    }
+    stats->totalContacts = totalQuery.value(0).toInt();
+
+    QSqlQuery workedQuery(db);
+    if (!workedQuery.exec(QStringLiteral("SELECT COUNT(DISTINCT dxcc_entity) FROM contacts "
+                                          "WHERE dxcc_entity IS NOT NULL AND dxcc_entity != %1")
+                               .arg(kUnknownDxccCode))
+        || !workedQuery.next()) {
+        if (errorMessage)
+            *errorMessage = workedQuery.lastError().text();
+        return false;
+    }
+    stats->entitiesWorked = workedQuery.value(0).toInt();
+
+    QSqlQuery confirmedQuery(db);
+    if (!confirmedQuery.exec(QStringLiteral("SELECT COUNT(DISTINCT dxcc_entity) FROM contacts "
+                                             "WHERE dxcc_entity IS NOT NULL AND dxcc_entity != %1 "
+                                             "AND UPPER(TRIM(qsl)) = 'Y'")
+                                  .arg(kUnknownDxccCode))
+        || !confirmedQuery.next()) {
+        if (errorMessage)
+            *errorMessage = confirmedQuery.lastError().text();
+        return false;
+    }
+    stats->entitiesConfirmed = confirmedQuery.value(0).toInt();
+
+    return true;
+}
+
+const QStringList &dxccChallengeRowNames()
+{
+    static const QStringList names = {
+        QStringLiteral("Mixed"),
+        QStringLiteral("CW"),
+        QStringLiteral("Phone"),
+        QStringLiteral("Digital"),
+        QStringLiteral("Satellite"),
+    };
+    return names;
+}
+
+const QStringList &dxccChallengeBandNames()
+{
+    static const QStringList names = {
+        QStringLiteral("160M"), QStringLiteral("80M"), QStringLiteral("40M"), QStringLiteral("30M"),
+        QStringLiteral("20M"),  QStringLiteral("17M"), QStringLiteral("15M"), QStringLiteral("12M"),
+        QStringLiteral("10M"),  QStringLiteral("6M"),  QStringLiteral("2M"),  QStringLiteral("70CM"),
+    };
+    return names;
+}
+
+bool dxccChallengeMatrix(DxccChallengeMatrix *matrix, QString *errorMessage)
+{
+    QSqlDatabase db = QSqlDatabase::database(kConnectionName);
+    QSqlQuery query(db);
+    if (!query.exec(QStringLiteral("SELECT dxcc_entity, band, mode, prop_mode FROM contacts "
+                                    "WHERE dxcc_entity IS NOT NULL AND dxcc_entity != %1 "
+                                    "AND UPPER(TRIM(qsl)) = 'Y'")
+                         .arg(kUnknownDxccCode))) {
+        if (errorMessage)
+            *errorMessage = query.lastError().text();
+        return false;
+    }
+
+    static const QSet<QString> kPhoneModes = {
+        QStringLiteral("SSB"), QStringLiteral("USB"), QStringLiteral("LSB"),
+        QStringLiteral("AM"),  QStringLiteral("FM"),  QStringLiteral("FMN"),
+    };
+
+    const QStringList &bandNames = dxccChallengeBandNames();
+
+    QSet<int> cellEntities[kDxccChallengeRowCount][kDxccChallengeBandCount];
+    QSet<QString> challengeSlots[kDxccChallengeRowCount];
+
+    const auto recordSlot = [&](int row, int entity, int bandIndex, const QString &slotKey) {
+        if (bandIndex >= 0)
+            cellEntities[row][bandIndex].insert(entity);
+        challengeSlots[row].insert(QString::number(entity) + QLatin1Char('|') + slotKey);
+    };
+
+    while (query.next()) {
+        const int entity = query.value(0).toInt();
+        const QString band = query.value(1).toString().trimmed().toUpper();
+        const QString mode = query.value(2).toString().trimmed().toUpper();
+        const QString propMode = query.value(3).toString().trimmed().toUpper();
+        const bool isSatellite = propMode == QStringLiteral("SAT");
+
+        const int bandIndex = bandNames.indexOf(band);
+        // A satellite QSO occupies its own Challenge slot ("SAT") rather
+        // than the literal band it used, per BandPilot's Challenge total
+        // counting every tracked band plus satellite as separate slots.
+        const QString slotKey = isSatellite ? QStringLiteral("SAT") : band;
+
+        recordSlot(0, entity, bandIndex, slotKey); // Mixed: no mode restriction
+
+        if (isSatellite) {
+            recordSlot(4, entity, bandIndex, slotKey); // Satellite
+            continue; // a satellite QSO isn't also a CW/Phone/Digital one
+        }
+
+        if (!mode.isEmpty()) {
+            int row;
+            if (mode == QStringLiteral("CW"))
+                row = 1;
+            else if (kPhoneModes.contains(mode))
+                row = 2;
+            else
+                row = 3; // Digital: everything else (RTTY, PSK31, FT8, FT4, ...)
+            recordSlot(row, entity, bandIndex, slotKey);
+        }
+    }
+
+    for (int row = 0; row < kDxccChallengeRowCount; ++row) {
+        for (int col = 0; col < kDxccChallengeBandCount; ++col)
+            matrix->counts[row][col] = cellEntities[row][col].size();
+        matrix->challenge[row] = challengeSlots[row].size();
+    }
+
+    return true;
 }
 
 } // namespace Database

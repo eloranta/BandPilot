@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QStringList>
 #include <QUrl>
 
 // Database access layer for BandPilot.
@@ -66,6 +67,53 @@ bool importLotwAdif(const QByteArray &data, AdifImportResult *result, QString *e
 // to a human-readable description). Callers are responsible for confirming
 // this with the user first -- it does not ask.
 int clearAllContacts(QString *errorMessage = nullptr);
+
+// A quick logbook summary for a persistent status bar display: total QSOs
+// logged, distinct DXCC entities worked (logged at all), and distinct DXCC
+// entities confirmed (qsl = 'Y', case-insensitive). The "(Unknown)"
+// sentinel entity (see kUnknownDxccCode in database.cpp) never counts as a
+// worked/confirmed entity.
+struct ContactStats
+{
+    int totalContacts = 0;
+    int entitiesWorked = 0;
+    int entitiesConfirmed = 0;
+};
+
+// Computes contactStats() over the "contacts" table on connectionName()'s
+// database connection. Returns false only on a database error (with
+// *errorMessage set).
+bool contactStats(ContactStats *stats, QString *errorMessage = nullptr);
+
+// Row (mode-category) and column (band) labels for dxccChallengeMatrix(),
+// in display order. "Satellite" is classified by ADIF PROP_MODE = "SAT"
+// (not by the QSO's actual modulation), and its QSOs are excluded from
+// CW/Phone/Digital -- a satellite contact is its own DXCC award category,
+// not also a CW/Phone/Digital one. "Mixed" places no mode restriction at
+// all, so it's the union across every other row.
+constexpr int kDxccChallengeRowCount = 5; // Mixed, CW, Phone, Digital, Satellite
+constexpr int kDxccChallengeBandCount = 12; // 160m through 70cm
+
+const QStringList &dxccChallengeRowNames();
+const QStringList &dxccChallengeBandNames();
+
+// Distinct-DXCC-entity-confirmed counts, one row per mode category and one
+// column per band (see dxccChallengeRowNames()/dxccChallengeBandNames()),
+// plus a per-row "challenge" total: the count of distinct (entity, band)
+// slots confirmed in that mode category, where a satellite QSO occupies a
+// slot of its own (labeled "SAT") alongside the 12 tracked bands rather
+// than the literal band it used. challenge[0] (the Mixed row) is the
+// overall DXCC Challenge total across every mode.
+struct DxccChallengeMatrix
+{
+    int counts[kDxccChallengeRowCount][kDxccChallengeBandCount] = {};
+    int challenge[kDxccChallengeRowCount] = {};
+};
+
+// Computes dxccChallengeMatrix() over the "contacts" table on
+// connectionName()'s database connection. Returns false only on a database
+// error (with *errorMessage set).
+bool dxccChallengeMatrix(DxccChallengeMatrix *matrix, QString *errorMessage = nullptr);
 
 // Exposed for testing: resolves a callsign to a dxcc_entity.entity_code via
 // cty.dat and the "dxcc_entity" table already seeded on connectionName()'s

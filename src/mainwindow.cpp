@@ -10,6 +10,7 @@
 #include <QFormLayout>
 #include <QHeaderView>
 #include <QLineEdit>
+#include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -21,7 +22,10 @@
 #include <QSqlRelationalDelegate>
 #include <QSqlRelationalTableModel>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QTableView>
+#include <QTableWidget>
+#include <QTableWidgetItem>
 
 #include "database.h"
 #include "version.h"
@@ -96,7 +100,31 @@ void MainWindow::setupUi()
     m_tableView->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_tableView, &QTableView::customContextMenuRequested, this,
             &MainWindow::showTableContextMenu);
-    setCentralWidget(m_tableView);
+
+    const QStringList &rowNames = Database::dxccChallengeRowNames();
+    const QStringList &bandNames = Database::dxccChallengeBandNames();
+
+    m_dxccChallengeTable = new QTableWidget(rowNames.size(), bandNames.size() + 1, this);
+    m_dxccChallengeTable->setVerticalHeaderLabels(rowNames);
+    m_dxccChallengeTable->setHorizontalHeaderLabels(QStringList(bandNames) << tr("Challenge"));
+    m_dxccChallengeTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_dxccChallengeTable->setSelectionMode(QAbstractItemView::NoSelection);
+    m_dxccChallengeTable->horizontalHeader()->setStretchLastSection(true);
+    for (int row = 0; row < rowNames.size(); ++row) {
+        for (int col = 0; col <= bandNames.size(); ++col) {
+            auto *item = new QTableWidgetItem;
+            item->setTextAlignment(Qt::AlignCenter);
+            m_dxccChallengeTable->setItem(row, col, item);
+        }
+    }
+
+    m_tabWidget = new QTabWidget(this);
+    m_tabWidget->addTab(m_tableView, tr("Contacts"));
+    m_tabWidget->addTab(m_dxccChallengeTable, tr("DXCC"));
+    setCentralWidget(m_tabWidget);
+
+    m_statsLabel = new QLabel(this);
+    statusBar()->addPermanentWidget(m_statsLabel);
 
     statusBar()->showMessage(tr("Starting up..."));
 }
@@ -171,10 +199,15 @@ void MainWindow::loadDatabase()
     m_tableView->setItemDelegate(new QSqlRelationalDelegate(m_tableView));
     m_tableView->resizeColumnsToContents();
 
+    // Keep the stats label current for in-place edits too (e.g. flipping a
+    // row's QSL status by hand), not just bulk import/clear actions.
+    connect(m_model, &QSqlRelationalTableModel::dataChanged, this, &MainWindow::updateStats);
+
     statusBar()->showMessage(
         tr("Database ready: %1 (%2 contacts)")
             .arg(Database::databaseFilePath())
             .arg(m_model->rowCount()));
+    updateStats();
 }
 
 void MainWindow::importAdif()
@@ -192,6 +225,7 @@ void MainWindow::importAdif()
     }
 
     m_model->select();
+    updateStats();
     statusBar()->showMessage(tr("Imported %1 contact(s) from %2").arg(imported).arg(filePath));
 }
 
@@ -280,6 +314,7 @@ void MainWindow::handleLotwReply(QNetworkReply *reply)
     }
 
     m_model->select();
+    updateStats();
     statusBar()->showMessage(tr("LoTW import: %1 new, %2 already logged, %3 skipped")
                                   .arg(result.imported)
                                   .arg(result.duplicates)
@@ -313,5 +348,38 @@ void MainWindow::clearAllContacts()
 
     m_model->select();
     m_tableView->resizeColumnsToContents();
+    updateStats();
     statusBar()->showMessage(tr("Cleared %1 contact(s)").arg(deleted), 5000);
+}
+
+void MainWindow::updateStats()
+{
+    Database::ContactStats stats;
+    QString statsError;
+    if (!Database::contactStats(&stats, &statsError)) {
+        qWarning() << "Failed to compute contact stats:" << statsError;
+    } else {
+        m_statsLabel->setText(tr("%1 QSOs · %2 DXCC confirmed / %3 worked")
+                                   .arg(stats.totalContacts)
+                                   .arg(stats.entitiesConfirmed)
+                                   .arg(stats.entitiesWorked));
+    }
+
+    Database::DxccChallengeMatrix matrix;
+    QString matrixError;
+    if (!Database::dxccChallengeMatrix(&matrix, &matrixError)) {
+        qWarning() << "Failed to compute DXCC Challenge matrix:" << matrixError;
+        return;
+    }
+
+    const auto cellText = [](int count) {
+        return count > 0 ? QString::number(count) : QString();
+    };
+    const int rowCount = Database::dxccChallengeRowNames().size();
+    const int bandCount = Database::dxccChallengeBandNames().size();
+    for (int row = 0; row < rowCount; ++row) {
+        for (int col = 0; col < bandCount; ++col)
+            m_dxccChallengeTable->item(row, col)->setText(cellText(matrix.counts[row][col]));
+        m_dxccChallengeTable->item(row, bandCount)->setText(cellText(matrix.challenge[row]));
+    }
 }

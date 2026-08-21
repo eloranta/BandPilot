@@ -29,6 +29,8 @@ private slots:
     void vietnamResolves();
     void cocosIslandsResolveDistinctly();
 
+    void dxccChallengeMatrixClassifiesModesAndBands();
+
     void importLotwAdifSkipsDuplicates();
     void importLotwAdifToleratesMissingFields();
     void clearAllContactsDeletesEverything();
@@ -64,7 +66,8 @@ void TstDatabase::initTestCase()
                                                  "  rst_tx TEXT,"
                                                  "  rst_rx TEXT,"
                                                  "  qsl TEXT,"
-                                                 "  comment TEXT"
+                                                 "  comment TEXT,"
+                                                 "  prop_mode TEXT"
                                                  ")")),
              qPrintable(createContacts.lastError().text()));
 
@@ -257,6 +260,82 @@ void TstDatabase::importLotwAdifToleratesMissingFields()
     // aren't affected by this test's own inserts.
     QSqlQuery cleanup(db);
     QVERIFY2(cleanup.exec(QStringLiteral("DELETE FROM contacts WHERE call IN ('N0FREQ', 'N0BAND')")),
+             qPrintable(cleanup.lastError().text()));
+}
+
+void TstDatabase::dxccChallengeMatrixClassifiesModesAndBands()
+{
+    QSqlDatabase db = QSqlDatabase::database(Database::connectionName());
+    QSqlQuery insert(db);
+    insert.prepare(QStringLiteral(
+        "INSERT INTO contacts (date, time, call, band, frequency, mode, prop_mode, dxcc_entity, qsl) "
+        "VALUES (:date, :time, :call, :band, '14.000', :mode, :prop_mode, :entity, :qsl)"));
+
+    struct Row
+    {
+        const char *call;
+        const char *band;
+        const char *mode;
+        const char *propMode;
+        int entity;
+        const char *qsl;
+    };
+    // Entity 1 (Canada): CW on 20M, CW again on 40M, and SSB on 20M (same
+    // band as the CW contact -- exercises that a cell counts distinct
+    // entities, not distinct QSOs, and that Mixed/Challenge dedupe across
+    // modes on the same band). Entity 6 (Alaska): FM via satellite on 2M
+    // (must land in Satellite only, not Phone, despite FM being a phone
+    // mode) plus one unconfirmed QSO that must be excluded entirely.
+    const Row rows[] = {
+        {"VE1AAA", "20M", "CW", "", 1, "Y"},
+        {"VE1AAA", "40M", "CW", "", 1, "Y"},
+        {"VE1AAA", "20M", "SSB", "", 1, "Y"},
+        {"KL7BBB", "2M", "FM", "SAT", 6, "Y"},
+        {"KL7BBB", "10M", "CW", "", 6, "N"}, // not confirmed -- must be excluded
+    };
+    for (const Row &row : rows) {
+        insert.bindValue(QStringLiteral(":date"), QStringLiteral("2024-02-01"));
+        insert.bindValue(QStringLiteral(":time"), QStringLiteral("00:00"));
+        insert.bindValue(QStringLiteral(":call"), QString::fromLatin1(row.call));
+        insert.bindValue(QStringLiteral(":band"), QString::fromLatin1(row.band));
+        insert.bindValue(QStringLiteral(":mode"), QString::fromLatin1(row.mode));
+        insert.bindValue(QStringLiteral(":prop_mode"), QString::fromLatin1(row.propMode));
+        insert.bindValue(QStringLiteral(":entity"), row.entity);
+        insert.bindValue(QStringLiteral(":qsl"), QString::fromLatin1(row.qsl));
+        QVERIFY2(insert.exec(), qPrintable(insert.lastError().text()));
+    }
+
+    Database::DxccChallengeMatrix matrix;
+    QString errorMessage;
+    QVERIFY2(Database::dxccChallengeMatrix(&matrix, &errorMessage), qPrintable(errorMessage));
+
+    const QStringList &rowNames = Database::dxccChallengeRowNames();
+    const QStringList &bandNames = Database::dxccChallengeBandNames();
+    const int mixedRow = rowNames.indexOf(QStringLiteral("Mixed"));
+    const int cwRow = rowNames.indexOf(QStringLiteral("CW"));
+    const int phoneRow = rowNames.indexOf(QStringLiteral("Phone"));
+    const int satelliteRow = rowNames.indexOf(QStringLiteral("Satellite"));
+    const int band20m = bandNames.indexOf(QStringLiteral("20M"));
+    const int band40m = bandNames.indexOf(QStringLiteral("40M"));
+    const int band2m = bandNames.indexOf(QStringLiteral("2M"));
+    const int band10m = bandNames.indexOf(QStringLiteral("10M"));
+
+    QCOMPARE(matrix.counts[mixedRow][band20m], 1); // entity 1, both CW and SSB -- one entity
+    QCOMPARE(matrix.counts[mixedRow][band40m], 1);
+    QCOMPARE(matrix.counts[cwRow][band20m], 1);
+    QCOMPARE(matrix.counts[phoneRow][band20m], 1); // entity 1's SSB QSO
+    QCOMPARE(matrix.counts[satelliteRow][band2m], 1); // entity 6 via satellite
+    QCOMPARE(matrix.counts[phoneRow][band2m], 0); // NOT phone, despite FM mode -- it's satellite
+    QCOMPARE(matrix.counts[mixedRow][band10m], 0); // entity 6's 10M QSO was unconfirmed
+
+    // Challenge: entity 1 occupies 20M and 40M (2 slots, CW+SSB on 20M
+    // collapse into one slot); entity 6 occupies one "SAT" slot -- 3 total.
+    QCOMPARE(matrix.challenge[mixedRow], 3);
+    QCOMPARE(matrix.challenge[cwRow], 2); // entity 1: 20M, 40M
+    QCOMPARE(matrix.challenge[satelliteRow], 1); // entity 6: SAT
+
+    QSqlQuery cleanup(db);
+    QVERIFY2(cleanup.exec(QStringLiteral("DELETE FROM contacts WHERE call IN ('VE1AAA', 'KL7BBB')")),
              qPrintable(cleanup.lastError().text()));
 }
 
