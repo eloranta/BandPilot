@@ -3,6 +3,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QDate>
+#include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFileDialog>
@@ -16,6 +17,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QSqlRelationalDelegate>
 #include <QSqlRelationalTableModel>
 #include <QStatusBar>
@@ -40,6 +42,34 @@ QString lotwResponseMessage(const QByteArray &data)
         message = message.left(200) + QStringLiteral("...");
     return message;
 }
+
+// XORs against a fixed, non-secret key. This is obfuscation, not
+// encryption -- it only stops the LoTW password from sitting in
+// QSettings' backing store (an .ini file or registry key) as plain,
+// human-readable text; anyone with access to that store and this source
+// file can trivially recover it. Self-inverse, so the same function
+// applies and reverses the XOR.
+QByteArray xorObfuscate(QByteArray data)
+{
+    static const char kKey[] = "BandPilot-LoTW-settings-obfuscation";
+    constexpr int keyLen = sizeof(kKey) - 1;
+    for (int i = 0; i < data.size(); ++i)
+        data[i] = data[i] ^ kKey[i % keyLen];
+    return data;
+}
+
+QString obfuscatePassword(const QString &password)
+{
+    return QString::fromLatin1(xorObfuscate(password.toUtf8()).toBase64());
+}
+
+QString deobfuscatePassword(const QString &stored)
+{
+    return QString::fromUtf8(xorObfuscate(QByteArray::fromBase64(stored.toLatin1())));
+}
+
+const char *const kSettingsLotwLogin = "LoTW/Login";
+const char *const kSettingsLotwPassword = "LoTW/Password";
 
 } // namespace
 
@@ -167,11 +197,14 @@ void MainWindow::importAdif()
 
 void MainWindow::importLotw()
 {
+    QSettings settings;
+
     QDialog dialog(this);
     dialog.setWindowTitle(tr("Import from LoTW"));
 
-    auto *loginEdit = new QLineEdit(&dialog);
-    auto *passwordEdit = new QLineEdit(&dialog);
+    auto *loginEdit = new QLineEdit(settings.value(QString::fromLatin1(kSettingsLotwLogin)).toString(), &dialog);
+    auto *passwordEdit = new QLineEdit(
+        deobfuscatePassword(settings.value(QString::fromLatin1(kSettingsLotwPassword)).toString()), &dialog);
     passwordEdit->setEchoMode(QLineEdit::Password);
     auto *qslSinceEdit = new QLineEdit(QStringLiteral("2000-01-01"), &dialog);
 
@@ -200,6 +233,9 @@ void MainWindow::importLotw()
         return;
     }
 
+    settings.setValue(QString::fromLatin1(kSettingsLotwLogin), login);
+    settings.setValue(QString::fromLatin1(kSettingsLotwPassword), obfuscatePassword(password));
+
     QNetworkRequest request(Database::lotwReportUrl(login, password, qslSince));
     // The request URL carries the LoTW password as a query parameter;
     // refuse to let a redirect quietly downgrade it to plain HTTP.
@@ -219,6 +255,7 @@ void MainWindow::handleLotwReply(QNetworkReply *reply)
     reply->deleteLater();
 
     if (error != QNetworkReply::NoError) {
+        qWarning() << "LoTW download failed:" << errorText;
         statusBar()->showMessage(tr("LoTW download failed: %1").arg(errorText), 8000);
         return;
     }
@@ -226,12 +263,15 @@ void MainWindow::handleLotwReply(QNetworkReply *reply)
     Database::AdifImportResult result;
     QString errorMessage;
     if (!Database::importLotwAdif(data, &result, &errorMessage)) {
+        qWarning() << "LoTW import failed:" << errorMessage;
         statusBar()->showMessage(tr("LoTW import failed: %1").arg(errorMessage), 8000);
         return;
     }
 
     if (result.imported == 0 && result.duplicates == 0 && result.invalid == 0) {
         const QString serverMessage = lotwResponseMessage(data);
+        qWarning() << "LoTW returned no QSO records:"
+                    << (serverMessage.isEmpty() ? QStringLiteral("(empty response)") : serverMessage);
         statusBar()->showMessage(serverMessage.isEmpty()
                                       ? tr("LoTW returned an empty response.")
                                       : tr("LoTW returned no QSO records: %1").arg(serverMessage),
