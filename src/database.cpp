@@ -394,21 +394,47 @@ const QHash<QString, QString> &dxccNameOverrides()
         {QStringLiteral("n.z. subantarctic is."), QStringLiteral("New Zealand Subantarctic Islands")},
         {QStringLiteral("pr. edward & marion is."), QStringLiteral("Prince Edward & Marion Is.")},
         {QStringLiteral("bear island"), QStringLiteral("Svalbard")},
+        {QStringLiteral("vietnam"), QStringLiteral("Viet Nam")},
+    };
+    return overrides;
+}
+
+// cty.dat entity names that can't be bridged via dxccNameOverrides() above
+// because their correct ARRL counterpart's normalized form collides with a
+// *different* entity's normalized form -- normalizeEntityName() strips
+// "Island(s)"/"I."/"Is." and drops parentheticals, so "Cocos I." (Costa
+// Rica, entity 37) and "Cocos (Keeling) Is." (Australia, entity 38) both
+// normalize to "cocos" and dxccNameIndex() correctly refuses to guess
+// between them, dropping the key entirely. These map straight to the ARRL
+// entity_code (see resources/dxcc-entities.txt), bypassing the name index.
+// Keyed by the cty.dat name lower-cased.
+const QHash<QString, int> &dxccCodeOverrides()
+{
+    static const QHash<QString, int> overrides = {
+        {QStringLiteral("cocos island"), 37},
+        {QStringLiteral("cocos (keeling) islands"), 38},
     };
     return overrides;
 }
 
 // Best-effort DXCC entity code for a callsign via cty.dat (if loaded),
-// correlated to this app's dxcc_entity table by (overridden, then fuzzy)
-// name match. Returns -1 if cty.dat isn't loaded, the callsign matches no
-// prefix, or the matched country name doesn't correlate to a known entity.
+// correlated to this app's dxcc_entity table by (direct code override,
+// then name override, then fuzzy name match). Returns -1 if cty.dat isn't
+// loaded, the callsign matches no prefix, or the matched country name
+// doesn't correlate to a known entity.
 int dxccCodeForCallsign(const QString &callsign)
 {
     const QString country = Cty::countryForCallsign(callsign);
     if (country.isEmpty())
         return -1;
 
-    const auto overrideIt = dxccNameOverrides().constFind(country.trimmed().toLower());
+    const QString key = country.trimmed().toLower();
+
+    const auto codeOverrideIt = dxccCodeOverrides().constFind(key);
+    if (codeOverrideIt != dxccCodeOverrides().constEnd())
+        return codeOverrideIt.value();
+
+    const auto overrideIt = dxccNameOverrides().constFind(key);
     const QString lookupName =
         overrideIt != dxccNameOverrides().constEnd() ? overrideIt.value() : country;
 
