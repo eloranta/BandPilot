@@ -30,6 +30,7 @@ private slots:
     void cocosIslandsResolveDistinctly();
 
     void importLotwAdifSkipsDuplicates();
+    void importLotwAdifToleratesMissingFields();
     void clearAllContactsDeletesEverything();
 };
 
@@ -202,6 +203,61 @@ void TstDatabase::importLotwAdifSkipsDuplicates()
     QVERIFY2(count.exec(), qPrintable(count.lastError().text()));
     QVERIFY(count.next());
     QCOMPARE(count.value(0).toInt(), 1);
+}
+
+void TstDatabase::importLotwAdifToleratesMissingFields()
+{
+    // Regression test: a real LoTW report often omits FREQ (and some
+    // records may lack BAND/MODE too). "band"/"frequency"/"mode" are NOT
+    // NULL columns, and record.value() previously returned a null QString
+    // for a missing ADIF field, which Qt's SQL layer binds as SQL NULL --
+    // violating the constraint and failing the whole import with "NOT NULL
+    // constraint failed: contacts.frequency".
+    QSqlDatabase db = QSqlDatabase::database(Database::connectionName());
+
+    QString adif = QStringLiteral("<ADIF_VER:5>3.1.0<EOH>\n");
+    adif += adifField(QStringLiteral("QSO_DATE"), QStringLiteral("20240103"));
+    adif += adifField(QStringLiteral("TIME_ON"), QStringLiteral("0200"));
+    adif += adifField(QStringLiteral("CALL"), QStringLiteral("N0FREQ"));
+    adif += adifField(QStringLiteral("BAND"), QStringLiteral("15M"));
+    adif += adifField(QStringLiteral("MODE"), QStringLiteral("SSB"));
+    // FREQ deliberately omitted.
+    adif += QStringLiteral("<EOR>\n");
+    adif += adifField(QStringLiteral("QSO_DATE"), QStringLiteral("20240104"));
+    adif += adifField(QStringLiteral("TIME_ON"), QStringLiteral("0300"));
+    adif += adifField(QStringLiteral("CALL"), QStringLiteral("N0BAND"));
+    // BAND, FREQ, and MODE all deliberately omitted.
+    adif += QStringLiteral("<EOR>\n");
+
+    Database::AdifImportResult result;
+    QString errorMessage;
+    QVERIFY2(Database::importLotwAdif(adif.toUtf8(), &result, &errorMessage),
+             qPrintable(errorMessage));
+    QCOMPARE(result.imported, 2);
+    QCOMPARE(result.duplicates, 0);
+    QCOMPARE(result.invalid, 0);
+
+    QSqlQuery check(db);
+    QVERIFY2(check.exec(QStringLiteral(
+                 "SELECT call, frequency, band, mode FROM contacts "
+                 "WHERE call IN ('N0FREQ', 'N0BAND') ORDER BY call")),
+             qPrintable(check.lastError().text()));
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toString(), QStringLiteral("N0BAND"));
+    QCOMPARE(check.value(1).toString(), QString()); // frequency: blank, not NULL
+    QCOMPARE(check.value(2).toString(), QString()); // band: blank, not NULL
+    QCOMPARE(check.value(3).toString(), QString()); // mode: blank, not NULL
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toString(), QStringLiteral("N0FREQ"));
+    QCOMPARE(check.value(1).toString(), QString()); // frequency: blank, not NULL
+    QCOMPARE(check.value(2).toString(), QStringLiteral("15M"));
+    QCOMPARE(check.value(3).toString(), QStringLiteral("SSB"));
+
+    // Clean up so later row-count assertions (clearAllContactsDeletesEverything)
+    // aren't affected by this test's own inserts.
+    QSqlQuery cleanup(db);
+    QVERIFY2(cleanup.exec(QStringLiteral("DELETE FROM contacts WHERE call IN ('N0FREQ', 'N0BAND')")),
+             qPrintable(cleanup.lastError().text()));
 }
 
 void TstDatabase::clearAllContactsDeletesEverything()

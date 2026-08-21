@@ -539,8 +539,15 @@ bool importAdifRecords(const QVector<AdifRecord> &records, bool deduplicate, Dat
         const QString call = record.value(QStringLiteral("call"));
         const QString date = adifDateToIso(record.value(QStringLiteral("qso_date")));
         const QString time = adifTimeToHm(record.value(QStringLiteral("time_on")));
-        const QString band = record.value(QStringLiteral("band"));
-        const QString mode = record.value(QStringLiteral("mode"));
+        // The "band"/"mode"/"frequency" columns are NOT NULL, but a real
+        // ADIF record (e.g. from LoTW, which often omits FREQ) may simply
+        // lack the field. QMap::value() returns a null QString for a
+        // missing key, and Qt's SQL layer binds a null QString as SQL NULL
+        // rather than '' -- violating the NOT NULL constraint. The
+        // two-argument value() form supplies a non-null empty-string
+        // default instead, so a missing field just logs as blank.
+        const QString band = record.value(QStringLiteral("band"), QStringLiteral(""));
+        const QString mode = record.value(QStringLiteral("mode"), QStringLiteral(""));
         if (call.isEmpty() || date.isEmpty() || time.isEmpty()) {
             ++result->invalid;
             continue; // not enough to log a QSO; skip malformed/incomplete record
@@ -568,7 +575,7 @@ bool importAdifRecords(const QVector<AdifRecord> &records, bool deduplicate, Dat
         query.bindValue(":time", time);
         query.bindValue(":call", call);
         query.bindValue(":band", band);
-        query.bindValue(":frequency", record.value(QStringLiteral("freq")));
+        query.bindValue(":frequency", record.value(QStringLiteral("freq"), QStringLiteral("")));
         query.bindValue(":mode", mode);
         query.bindValue(":submode", record.value(QStringLiteral("submode")));
         query.bindValue(":grid", record.value(QStringLiteral("gridsquare")));
