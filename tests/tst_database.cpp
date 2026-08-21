@@ -28,6 +28,8 @@ private slots:
 
     void vietnamResolves();
     void cocosIslandsResolveDistinctly();
+
+    void importLotwAdifSkipsDuplicates();
 };
 
 void TstDatabase::initTestCase()
@@ -43,6 +45,26 @@ void TstDatabase::initTestCase()
                                               "  entity TEXT NOT NULL"
                                               ")")),
              qPrintable(createTable.lastError().text()));
+
+    QSqlQuery createContacts(db);
+    QVERIFY2(createContacts.exec(QStringLiteral("CREATE TABLE contacts ("
+                                                 "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                                                 "  date TEXT NOT NULL,"
+                                                 "  time TEXT NOT NULL,"
+                                                 "  call TEXT NOT NULL,"
+                                                 "  band TEXT NOT NULL,"
+                                                 "  frequency TEXT NOT NULL,"
+                                                 "  mode TEXT NOT NULL,"
+                                                 "  submode TEXT,"
+                                                 "  dxcc_entity INTEGER,"
+                                                 "  deleted_entity TEXT DEFAULT '',"
+                                                 "  grid TEXT,"
+                                                 "  rst_tx TEXT,"
+                                                 "  rst_rx TEXT,"
+                                                 "  qsl TEXT,"
+                                                 "  comment TEXT"
+                                                 ")")),
+             qPrintable(createContacts.lastError().text()));
 
     const QString entitiesPath = QFINDTESTDATA("../resources/dxcc-entities.txt");
     QVERIFY(!entitiesPath.isEmpty());
@@ -120,6 +142,65 @@ void TstDatabase::cocosIslandsResolveDistinctly()
     // than the (correctly ambiguity-dropped) fuzzy name index.
     QCOMPARE(Database::dxccEntityCodeForCallsign(QStringLiteral("TI9ABC")), 37);
     QCOMPARE(Database::dxccEntityCodeForCallsign(QStringLiteral("VK9CX")), 38);
+}
+
+namespace {
+
+QString adifField(const QString &name, const QString &value)
+{
+    return QStringLiteral("<%1:%2>%3").arg(name).arg(value.size()).arg(value);
+}
+
+} // namespace
+
+void TstDatabase::importLotwAdifSkipsDuplicates()
+{
+    QSqlDatabase db = QSqlDatabase::database(Database::connectionName());
+    QSqlQuery seed(db);
+    QVERIFY2(seed.exec(QStringLiteral(
+                 "INSERT INTO contacts (date, time, call, band, frequency, mode, submode, qsl) "
+                 "VALUES ('2024-01-01', '12:34', 'W1AW', '20M', '14.074', 'FT8', '', '')")),
+             qPrintable(seed.lastError().text()));
+
+    // Two LoTW records: one already logged above (must be skipped as a
+    // duplicate, matched by date+time+call+band+mode), one new.
+    QString adif = QStringLiteral("<ADIF_VER:5>3.1.0<EOH>\n");
+    adif += adifField(QStringLiteral("QSO_DATE"), QStringLiteral("20240101"));
+    adif += adifField(QStringLiteral("TIME_ON"), QStringLiteral("1234"));
+    adif += adifField(QStringLiteral("CALL"), QStringLiteral("W1AW"));
+    adif += adifField(QStringLiteral("BAND"), QStringLiteral("20M"));
+    adif += adifField(QStringLiteral("MODE"), QStringLiteral("FT8"));
+    adif += QStringLiteral("<EOR>\n");
+    adif += adifField(QStringLiteral("QSO_DATE"), QStringLiteral("20240102"));
+    adif += adifField(QStringLiteral("TIME_ON"), QStringLiteral("0100"));
+    adif += adifField(QStringLiteral("CALL"), QStringLiteral("K5ABC"));
+    adif += adifField(QStringLiteral("BAND"), QStringLiteral("40M"));
+    adif += adifField(QStringLiteral("FREQ"), QStringLiteral("7.040"));
+    adif += adifField(QStringLiteral("MODE"), QStringLiteral("CW"));
+    adif += adifField(QStringLiteral("QSL_RCVD"), QStringLiteral("Y"));
+    adif += QStringLiteral("<EOR>\n");
+
+    Database::AdifImportResult result;
+    QString errorMessage;
+    QVERIFY2(Database::importLotwAdif(adif.toUtf8(), &result, &errorMessage),
+             qPrintable(errorMessage));
+    QCOMPARE(result.imported, 1);
+    QCOMPARE(result.duplicates, 1);
+    QCOMPARE(result.invalid, 0);
+
+    QSqlQuery check(db);
+    QVERIFY2(check.exec(QStringLiteral("SELECT qsl FROM contacts WHERE call = 'K5ABC'")),
+             qPrintable(check.lastError().text()));
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toString(), QStringLiteral("Y"));
+
+    // The pre-existing W1AW contact must still be exactly one row -- not
+    // duplicated by the re-imported LoTW record.
+    QSqlQuery count(db);
+    count.prepare(QStringLiteral("SELECT COUNT(*) FROM contacts WHERE call = 'W1AW'"));
+    QVERIFY2(count.exec(), qPrintable(count.lastError().text()));
+    QVERIFY(count.next());
+    QCOMPARE(count.value(0).toInt(), 1);
 }
 
 QTEST_GUILESS_MAIN(TstDatabase)
