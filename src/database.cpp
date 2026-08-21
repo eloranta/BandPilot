@@ -15,6 +15,7 @@
 #include <QStandardPaths>
 #include <QStringList>
 #include <QTextStream>
+#include <QUrlQuery>
 #include <QVector>
 
 namespace {
@@ -503,6 +504,106 @@ bool backfillUnresolvedDxccEntities(QString *errorMessage)
     return true;
 }
 
+// Inserts each parsed ADIF record as a new contact, looking up its DXCC
+// entity via cty.dat. Shared by importAdif() (deduplicate = false: every
+// record is inserted) and importLotwAdif() (deduplicate = true: a record
+// matching an existing contact's date, time, call, band, and mode is
+// skipped instead, since a LoTW QSL report re-lists QSOs that may already
+// be logged some other way). Returns false only on a database error (with
+// *errorMessage set); malformed/duplicate records are just tallied and
+// skipped, not treated as failures.
+bool importAdifRecords(const QVector<AdifRecord> &records, bool deduplicate, Database::AdifImportResult *result,
+                        QString *errorMessage)
+{
+    QSqlDatabase db = QSqlDatabase::database(kConnectionName);
+    if (!db.transaction()) {
+        if (errorMessage)
+            *errorMessage = db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery duplicateQuery(db);
+    if (deduplicate) {
+        duplicateQuery.prepare(
+            "SELECT 1 FROM contacts WHERE date = :date AND time = :time "
+            "AND UPPER(call) = UPPER(:call) AND band = :band AND mode = :mode LIMIT 1");
+    }
+
+    QSqlQuery query(db);
+    query.prepare(
+        "INSERT INTO contacts "
+        "(date, time, call, band, frequency, mode, submode, dxcc_entity, grid, rst_tx, rst_rx, qsl, comment) "
+        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :dxcc_entity, :grid, :rst_tx, :rst_rx, :qsl, :comment)");
+
+    for (const AdifRecord &record : records) {
+        const QString call = record.value(QStringLiteral("call"));
+        const QString date = adifDateToIso(record.value(QStringLiteral("qso_date")));
+        const QString time = adifTimeToHm(record.value(QStringLiteral("time_on")));
+        const QString band = record.value(QStringLiteral("band"));
+        const QString mode = record.value(QStringLiteral("mode"));
+        if (call.isEmpty() || date.isEmpty() || time.isEmpty()) {
+            ++result->invalid;
+            continue; // not enough to log a QSO; skip malformed/incomplete record
+        }
+
+        if (deduplicate) {
+            duplicateQuery.bindValue(":date", date);
+            duplicateQuery.bindValue(":time", time);
+            duplicateQuery.bindValue(":call", call);
+            duplicateQuery.bindValue(":band", band);
+            duplicateQuery.bindValue(":mode", mode);
+            if (!duplicateQuery.exec()) {
+                if (errorMessage)
+                    *errorMessage = duplicateQuery.lastError().text();
+                db.rollback();
+                return false;
+            }
+            if (duplicateQuery.next()) {
+                ++result->duplicates;
+                continue;
+            }
+        }
+
+        query.bindValue(":date", date);
+        query.bindValue(":time", time);
+        query.bindValue(":call", call);
+        query.bindValue(":band", band);
+        query.bindValue(":frequency", record.value(QStringLiteral("freq")));
+        query.bindValue(":mode", mode);
+        query.bindValue(":submode", record.value(QStringLiteral("submode")));
+        query.bindValue(":grid", record.value(QStringLiteral("gridsquare")));
+        query.bindValue(":rst_tx", record.value(QStringLiteral("rst_sent")));
+        query.bindValue(":rst_rx", record.value(QStringLiteral("rst_rcvd")));
+        query.bindValue(":qsl", record.value(QStringLiteral("qsl_rcvd")));
+        query.bindValue(":comment", record.contains(QStringLiteral("comment"))
+                                         ? record.value(QStringLiteral("comment"))
+                                         : record.value(QStringLiteral("notes")));
+
+        bool dxccOk = false;
+        int dxccCode = record.value(QStringLiteral("dxcc")).toInt(&dxccOk);
+        if (!dxccOk || dxccCode < 1 || dxccCode > 999)
+            dxccCode = dxccCodeForCallsign(call); // -1 if no cty.dat match
+        if (dxccCode < 1 || dxccCode > 999)
+            dxccCode = kUnknownDxccCode;
+        query.bindValue(":dxcc_entity", dxccCode);
+
+        if (!query.exec()) {
+            if (errorMessage)
+                *errorMessage = query.lastError().text();
+            db.rollback();
+            return false;
+        }
+        ++result->imported;
+    }
+
+    if (!db.commit()) {
+        if (errorMessage)
+            *errorMessage = db.lastError().text();
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 namespace Database {
@@ -574,66 +675,32 @@ int importAdif(const QString &filePath, QString *errorMessage)
 
     const QVector<AdifRecord> records = parseAdifRecords(content);
 
-    QSqlDatabase db = QSqlDatabase::database(kConnectionName);
-    if (!db.transaction()) {
-        if (errorMessage)
-            *errorMessage = db.lastError().text();
+    AdifImportResult result;
+    if (!importAdifRecords(records, /*deduplicate=*/false, &result, errorMessage))
         return -1;
-    }
 
-    QSqlQuery query(db);
-    query.prepare(
-        "INSERT INTO contacts "
-        "(date, time, call, band, frequency, mode, submode, dxcc_entity, grid, rst_tx, rst_rx, qsl, comment) "
-        "VALUES (:date, :time, :call, :band, :frequency, :mode, :submode, :dxcc_entity, :grid, :rst_tx, :rst_rx, :qsl, :comment)");
+    return result.imported;
+}
 
-    int imported = 0;
-    for (const AdifRecord &record : records) {
-        const QString call = record.value(QStringLiteral("call"));
-        const QString date = adifDateToIso(record.value(QStringLiteral("qso_date")));
-        const QString time = adifTimeToHm(record.value(QStringLiteral("time_on")));
-        if (call.isEmpty() || date.isEmpty() || time.isEmpty())
-            continue; // not enough to log a QSO; skip malformed/incomplete record
+QUrl lotwReportUrl(const QString &login, const QString &password, const QString &qslSince)
+{
+    QUrl url(QStringLiteral("https://lotw.arrl.org/lotwuser/lotwreport.adi"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("login"), login);
+    query.addQueryItem(QStringLiteral("password"), password);
+    query.addQueryItem(QStringLiteral("qso_query"), QStringLiteral("1"));
+    query.addQueryItem(QStringLiteral("qso_qsl"), QStringLiteral("yes"));
+    query.addQueryItem(QStringLiteral("qso_qslsince"), qslSince);
+    url.setQuery(query);
+    return url;
+}
 
-        query.bindValue(":date", date);
-        query.bindValue(":time", time);
-        query.bindValue(":call", call);
-        query.bindValue(":band", record.value(QStringLiteral("band")));
-        query.bindValue(":frequency", record.value(QStringLiteral("freq")));
-        query.bindValue(":mode", record.value(QStringLiteral("mode")));
-        query.bindValue(":submode", record.value(QStringLiteral("submode")));
-        query.bindValue(":grid", record.value(QStringLiteral("gridsquare")));
-        query.bindValue(":rst_tx", record.value(QStringLiteral("rst_sent")));
-        query.bindValue(":rst_rx", record.value(QStringLiteral("rst_rcvd")));
-        query.bindValue(":qsl", record.value(QStringLiteral("qsl_rcvd")));
-        query.bindValue(":comment", record.contains(QStringLiteral("comment"))
-                                         ? record.value(QStringLiteral("comment"))
-                                         : record.value(QStringLiteral("notes")));
+bool importLotwAdif(const QByteArray &data, AdifImportResult *result, QString *errorMessage)
+{
+    const QString content = QString::fromUtf8(data);
+    const QVector<AdifRecord> records = parseAdifRecords(content);
 
-        bool dxccOk = false;
-        int dxccCode = record.value(QStringLiteral("dxcc")).toInt(&dxccOk);
-        if (!dxccOk || dxccCode < 1 || dxccCode > 999)
-            dxccCode = dxccCodeForCallsign(call); // -1 if no cty.dat match
-        if (dxccCode < 1 || dxccCode > 999)
-            dxccCode = kUnknownDxccCode;
-        query.bindValue(":dxcc_entity", dxccCode);
-
-        if (!query.exec()) {
-            if (errorMessage)
-                *errorMessage = query.lastError().text();
-            db.rollback();
-            return -1;
-        }
-        ++imported;
-    }
-
-    if (!db.commit()) {
-        if (errorMessage)
-            *errorMessage = db.lastError().text();
-        return -1;
-    }
-
-    return imported;
+    return importAdifRecords(records, /*deduplicate=*/true, result, errorMessage);
 }
 
 } // namespace Database

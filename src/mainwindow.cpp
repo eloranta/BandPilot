@@ -2,10 +2,19 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QDate>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFileDialog>
+#include <QFormLayout>
 #include <QHeaderView>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QRegularExpression>
 #include <QSqlRelationalDelegate>
 #include <QSqlRelationalTableModel>
 #include <QStatusBar>
@@ -14,11 +23,32 @@
 #include "database.h"
 #include "version.h"
 
+namespace {
+
+// LoTW's own error responses (e.g. bad login/password) come back as an HTML
+// page with HTTP 200, not a network error -- so a zero-record import isn't
+// itself distinguishable from "no new QSOs" without looking at the body.
+// Strips tags down to a short plain-text summary suitable for a status
+// message.
+QString lotwResponseMessage(const QByteArray &data)
+{
+    QString message = QString::fromUtf8(data);
+    message.remove(QRegularExpression(QStringLiteral("<[^>]*>")));
+    message = message.simplified();
+    if (message.size() > 200)
+        message = message.left(200) + QStringLiteral("...");
+    return message;
+}
+
+} // namespace
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     setWindowTitle(tr("BandPilot %1").arg(QStringLiteral(BANDPILOT_VERSION)));
     resize(1000, 600);
+
+    m_networkManager = new QNetworkAccessManager(this);
 
     setupUi();
     setupMenuBar();
@@ -44,6 +74,9 @@ void MainWindow::setupMenuBar()
     QMenu *importMenu = fileMenu->addMenu(tr("&Import"));
     QAction *importAdifAction = importMenu->addAction(tr("&Adif..."));
     connect(importAdifAction, &QAction::triggered, this, &MainWindow::importAdif);
+
+    QAction *importLotwAction = importMenu->addAction(tr("&LoTW..."));
+    connect(importLotwAction, &QAction::triggered, this, &MainWindow::importLotw);
 
     fileMenu->addSeparator();
 
@@ -126,4 +159,86 @@ void MainWindow::importAdif()
 
     m_model->select();
     statusBar()->showMessage(tr("Imported %1 contact(s) from %2").arg(imported).arg(filePath));
+}
+
+void MainWindow::importLotw()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Import from LoTW"));
+
+    auto *loginEdit = new QLineEdit(&dialog);
+    auto *passwordEdit = new QLineEdit(&dialog);
+    passwordEdit->setEchoMode(QLineEdit::Password);
+    auto *qslSinceEdit = new QLineEdit(QStringLiteral("2000-01-01"), &dialog);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    auto *layout = new QFormLayout(&dialog);
+    layout->addRow(tr("Login:"), loginEdit);
+    layout->addRow(tr("Password:"), passwordEdit);
+    layout->addRow(tr("QSLs since:"), qslSinceEdit);
+    layout->addRow(buttons);
+
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const QString login = loginEdit->text().trimmed();
+    const QString password = passwordEdit->text();
+    const QString qslSince = qslSinceEdit->text().trimmed();
+    if (login.isEmpty() || password.isEmpty()) {
+        statusBar()->showMessage(tr("LoTW login and password are required."), 8000);
+        return;
+    }
+    if (!QDate::fromString(qslSince, Qt::ISODate).isValid()) {
+        statusBar()->showMessage(tr("\"QSLs since\" must use YYYY-MM-DD format."), 8000);
+        return;
+    }
+
+    QNetworkRequest request(Database::lotwReportUrl(login, password, qslSince));
+    // The request URL carries the LoTW password as a query parameter;
+    // refuse to let a redirect quietly downgrade it to plain HTTP.
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                          QNetworkRequest::NoLessSafeRedirectPolicy);
+
+    QNetworkReply *reply = m_networkManager->get(request);
+    statusBar()->showMessage(tr("Downloading LoTW report..."));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() { handleLotwReply(reply); });
+}
+
+void MainWindow::handleLotwReply(QNetworkReply *reply)
+{
+    const QByteArray data = reply->readAll();
+    const QNetworkReply::NetworkError error = reply->error();
+    const QString errorText = reply->errorString();
+    reply->deleteLater();
+
+    if (error != QNetworkReply::NoError) {
+        statusBar()->showMessage(tr("LoTW download failed: %1").arg(errorText), 8000);
+        return;
+    }
+
+    Database::AdifImportResult result;
+    QString errorMessage;
+    if (!Database::importLotwAdif(data, &result, &errorMessage)) {
+        statusBar()->showMessage(tr("LoTW import failed: %1").arg(errorMessage), 8000);
+        return;
+    }
+
+    if (result.imported == 0 && result.duplicates == 0 && result.invalid == 0) {
+        const QString serverMessage = lotwResponseMessage(data);
+        statusBar()->showMessage(serverMessage.isEmpty()
+                                      ? tr("LoTW returned an empty response.")
+                                      : tr("LoTW returned no QSO records: %1").arg(serverMessage),
+                                  8000);
+        return;
+    }
+
+    m_model->select();
+    statusBar()->showMessage(tr("LoTW import: %1 new, %2 already logged, %3 skipped")
+                                  .arg(result.imported)
+                                  .arg(result.duplicates)
+                                  .arg(result.invalid),
+                              8000);
 }

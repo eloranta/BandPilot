@@ -9,7 +9,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Sql Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Sql Network Test)
 
 qt_standard_project_setup()
 
@@ -29,6 +29,7 @@ target_include_directories(BandPilot PRIVATE src)
 target_link_libraries(BandPilot PRIVATE
     Qt6::Widgets
     Qt6::Sql
+    Qt6::Network
 )
 
 set_target_properties(BandPilot PROPERTIES

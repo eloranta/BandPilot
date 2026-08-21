@@ -5,6 +5,8 @@
 QT_BEGIN_NAMESPACE
 class QTableView;
 class QSqlRelationalTableModel;
+class QNetworkAccessManager;
+class QNetworkReply;
 QT_END_NAMESPACE
 
 // Top-level application window: menu bar + a QTableView bound to the
@@ -22,7 +24,10 @@ private:
     void setupMenuBar();
     void loadDatabase();
     void importAdif();
+    void importLotw();
+    void handleLotwReply(QNetworkReply *reply);
 
     QTableView *m_tableView = nullptr;
     QSqlRelationalTableModel *m_model = nullptr;
+    QNetworkAccessManager *m_networkManager = nullptr;
 };
