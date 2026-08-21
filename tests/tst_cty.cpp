@@ -37,6 +37,13 @@ private slots:
     void primaryPrefixWithoutAliasEntry();
     void exactCallOverrideKeepsSlash();
     void noMatchReturnsEmpty();
+
+    // These reload Cty:: from the real, checked-in cty.dat (tests/data/cty.dat)
+    // instead of the synthetic fixture above, so they must run after the
+    // synthetic-fixture tests -- once loaded here, the real table stays
+    // active for the rest of the test run.
+    void realCtyDatLoads();
+    void realCtyDatKnownCallsigns();
 };
 
 void TstCty::initTestCase()
@@ -94,6 +101,39 @@ void TstCty::noMatchReturnsEmpty()
 {
     QCOMPARE(Cty::countryForCallsign(QStringLiteral("ZZ9ZZZ")), QString());
     QCOMPARE(Cty::countryForCallsign(QString()), QString());
+}
+
+void TstCty::realCtyDatLoads()
+{
+    const QString path = QFINDTESTDATA("data/cty.dat");
+    QVERIFY(!path.isEmpty());
+
+    QString loadError;
+    QVERIFY2(Cty::load(path, &loadError), qPrintable(loadError));
+    QVERIFY(Cty::isLoaded());
+}
+
+void TstCty::realCtyDatKnownCallsigns()
+{
+    // Sanity-check a handful of well-known real-world callsign prefixes
+    // against AD1C's actual "Big CTY" data, including two cases (Hawaii and
+    // Alaska) where a more specific real-world prefix must win over the
+    // generic "K"/United States entry -- the same longest-match rule
+    // exercised with synthetic data above.
+    QCOMPARE(Cty::countryForCallsign(QStringLiteral("W1AW")), QStringLiteral("United States"));
+    QCOMPARE(Cty::countryForCallsign(QStringLiteral("KH6XYZ")), QStringLiteral("Hawaii"));
+    QCOMPARE(Cty::countryForCallsign(QStringLiteral("KL7ABC")), QStringLiteral("Alaska"));
+    QCOMPARE(Cty::countryForCallsign(QStringLiteral("OH2BH")), QStringLiteral("Finland"));
+
+    // "=KL7A" is a real exact-callsign override in cty.dat's United States
+    // record (a mainland ham holding that vanity call). A callsign that
+    // merely starts with "KL7A" but isn't that exact call -- like
+    // "KL7ABC" above -- must NOT inherit the override; it must fall
+    // through to the ordinary "KL" prefix match (Alaska). This regression
+    // was found by testing against the real file: a naive longest-prefix
+    // scan that doesn't treat "=" entries as exact-only would wrongly
+    // match "KL7A" as a 4-character prefix of "KL7ABC".
+    QCOMPARE(Cty::countryForCallsign(QStringLiteral("KL7A")), QStringLiteral("United States"));
 }
 
 QTEST_APPLESS_MAIN(TstCty)
