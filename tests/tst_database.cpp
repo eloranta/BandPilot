@@ -1,5 +1,6 @@
 #include <QFile>
 #include <QObject>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -34,6 +35,7 @@ private slots:
 
     void dxccEntityProgressTracksModesAndBands();
     void dxccEntityProgressPrefersRealPrefixOverAsteriskedOne();
+    void dxccEntityProgressMatchesRealLotwMonacoData();
 
     void importLotwAdifSkipsDuplicates();
     void importLotwAdifToleratesMissingFields();
@@ -399,6 +401,81 @@ void TstDatabase::dxccEntityProgressPrefersRealPrefixOverAsteriskedOne()
 
     QCOMPARE(findRow(248).prefix, QStringLiteral("I")); // Italy
     QCOMPARE(findRow(259).prefix, QStringLiteral("JW")); // Svalbard
+}
+
+void TstDatabase::dxccEntityProgressMatchesRealLotwMonacoData()
+{
+    // Regression anchor built from real data: these are the user's actual
+    // logged Monaco QSOs (four plain 3A2MW contacts plus three portable-
+    // format "3A/homecall" ones -- 3A/IW1RBI, 3A/PB8DX, 3A/F6EXV -- that
+    // were, before the countryForCallsign() portable-prefix fix, silently
+    // misattributed to Italy, the Netherlands, and France). The expected
+    // mode/band flags below are transcribed from the user's real LoTW
+    // "DXCC Award Account Status" page for Monaco: confirmed via Mixed and
+    // Digital (RTTY column) only -- all seven QSOs are FT8/JT65 -- on
+    // 40m through 10m (40,30,20,17,15,12,10) and nothing else.
+    QSqlDatabase db = QSqlDatabase::database(Database::connectionName());
+    QSqlQuery insert(db);
+    insert.prepare(QStringLiteral(
+        "INSERT INTO contacts (date, time, call, band, frequency, mode, dxcc_entity, qsl) "
+        "VALUES (:date, :time, :call, :band, '14.000', :mode, :entity, 'Y')"));
+
+    struct Row
+    {
+        const char *call;
+        const char *band;
+        const char *mode;
+    };
+    const Row rows[] = {
+        {"3A2MW", "12M", "FT8"},     {"3A2MW", "30M", "FT8"},   {"3A2MW", "10M", "JT65"},
+        {"3A2MW", "15M", "JT65"},    {"3A/IW1RBI", "40M", "FT8"}, {"3A/PB8DX", "20M", "FT8"},
+        {"3A/F6EXV", "17M", "FT8"},
+    };
+    for (const Row &row : rows) {
+        const QString call = QString::fromLatin1(row.call);
+        const int entity = Database::dxccEntityCodeForCallsign(call);
+        QVERIFY2(entity > 0, qPrintable(QStringLiteral("no DXCC entity resolved for %1").arg(call)));
+
+        insert.bindValue(QStringLiteral(":date"), QStringLiteral("2024-01-01"));
+        insert.bindValue(QStringLiteral(":time"), QStringLiteral("00:00"));
+        insert.bindValue(QStringLiteral(":call"), call);
+        insert.bindValue(QStringLiteral(":band"), QString::fromLatin1(row.band));
+        insert.bindValue(QStringLiteral(":mode"), QString::fromLatin1(row.mode));
+        insert.bindValue(QStringLiteral(":entity"), entity);
+        QVERIFY2(insert.exec(), qPrintable(insert.lastError().text()));
+    }
+
+    QVector<Database::DxccEntityProgress> progress;
+    QString errorMessage;
+    QVERIFY2(Database::dxccEntityProgress(&progress, &errorMessage), qPrintable(errorMessage));
+
+    const auto monacoIt = std::find_if(progress.cbegin(), progress.cend(), [](const auto &row) {
+        return row.entityName == QStringLiteral("Monaco");
+    });
+    QVERIFY(monacoIt != progress.cend());
+    const Database::DxccEntityProgress &monaco = *monacoIt;
+
+    const QStringList &rowNames = Database::dxccChallengeRowNames();
+    const QStringList &bandNames = Database::dxccChallengeBandNames();
+
+    QVERIFY(monaco.modeConfirmed[rowNames.indexOf(QStringLiteral("Mixed"))]);
+    QVERIFY(monaco.modeConfirmed[rowNames.indexOf(QStringLiteral("Digital"))]);
+    QVERIFY(!monaco.modeConfirmed[rowNames.indexOf(QStringLiteral("CW"))]);
+    QVERIFY(!monaco.modeConfirmed[rowNames.indexOf(QStringLiteral("Phone"))]);
+    QVERIFY(!monaco.modeConfirmed[rowNames.indexOf(QStringLiteral("Satellite"))]);
+
+    static const QSet<QString> kConfirmedBands = {
+        QStringLiteral("40M"), QStringLiteral("30M"), QStringLiteral("20M"), QStringLiteral("17M"),
+        QStringLiteral("15M"), QStringLiteral("12M"), QStringLiteral("10M"),
+    };
+    for (int i = 0; i < bandNames.size(); ++i) {
+        QCOMPARE(monaco.bandConfirmed[i], kConfirmedBands.contains(bandNames.at(i)));
+    }
+
+    QSqlQuery cleanup(db);
+    QVERIFY2(cleanup.exec(QStringLiteral(
+                 "DELETE FROM contacts WHERE call IN ('3A2MW', '3A/IW1RBI', '3A/PB8DX', '3A/F6EXV')")),
+             qPrintable(cleanup.lastError().text()));
 }
 
 void TstDatabase::clearAllContactsDeletesEverything()
