@@ -75,6 +75,30 @@ QString deobfuscatePassword(const QString &stored)
 const char *const kSettingsLotwLogin = "LoTW/Login";
 const char *const kSettingsLotwPassword = "LoTW/Password";
 
+// DXCC tab mode columns, in LoTW's own display order (Mix, Ph, CW, RT,
+// SAT) -- rowIndex is the matching index into
+// Database::dxccChallengeRowNames() (Mixed, CW, Phone, Digital,
+// Satellite), which uses a different order internally.
+struct DxccModeColumn
+{
+    const char *label;
+    int rowIndex;
+};
+const DxccModeColumn kDxccModeColumns[] = {
+    {"Mix", 0}, {"Ph", 2}, {"CW", 1}, {"RT", 3}, {"SAT", 4},
+};
+constexpr int kDxccModeColumnCount = 5;
+constexpr int kDxccInfoColumnCount = 2; // Prefix, Entity
+
+// Short band column headers ("160", not "160M"), matching
+// Database::dxccChallengeBandNames() 1:1 by position.
+QStringList dxccBandColumnLabels()
+{
+    return {QStringLiteral("160"), QStringLiteral("80"), QStringLiteral("40"), QStringLiteral("30"),
+            QStringLiteral("20"),  QStringLiteral("17"), QStringLiteral("15"), QStringLiteral("12"),
+            QStringLiteral("10"),  QStringLiteral("6"),  QStringLiteral("2"),  QStringLiteral("70CM")};
+}
+
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent)
@@ -101,26 +125,23 @@ void MainWindow::setupUi()
     connect(m_tableView, &QTableView::customContextMenuRequested, this,
             &MainWindow::showTableContextMenu);
 
-    // One row per single-mode award (Mixed/CW/Phone/Digital/Satellite),
-    // one row per single-band award (160m..70cm), and a final DXCC
-    // Challenge row -- mirrors the layout of LoTW's own "DXCC Award
-    // Account Status" page, with a single "DXCC Credits" column since
-    // (unlike that page) this app only knows LoTW-confirmed vs. not, not
-    // ARRL's separate new/in-process/granted award-application states.
-    QStringList awardNames = Database::dxccChallengeRowNames() + Database::dxccChallengeBandNames();
-    awardNames << tr("Challenge");
+    // One row per current DXCC entity (worked or not), one column per
+    // single-mode and single-band award -- mirrors LoTW's own per-entity
+    // "countries confirmed" checklist. Column order matches that report's:
+    // Prefix, Entity, then mode columns (Mix/Ph/CW/RT/SAT), then bands.
+    QStringList dxccHeaders;
+    dxccHeaders << tr("Prefix") << tr("Entity");
+    for (const DxccModeColumn &col : kDxccModeColumns)
+        dxccHeaders << tr(col.label);
+    dxccHeaders << dxccBandColumnLabels();
 
-    m_dxccChallengeTable = new QTableWidget(awardNames.size(), 1, this);
-    m_dxccChallengeTable->setVerticalHeaderLabels(awardNames);
-    m_dxccChallengeTable->setHorizontalHeaderLabels({tr("DXCC Credits")});
+    m_dxccChallengeTable = new QTableWidget(0, dxccHeaders.size(), this);
+    m_dxccChallengeTable->setHorizontalHeaderLabels(dxccHeaders);
+    m_dxccChallengeTable->verticalHeader()->setVisible(false);
     m_dxccChallengeTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_dxccChallengeTable->setSelectionMode(QAbstractItemView::NoSelection);
-    m_dxccChallengeTable->horizontalHeader()->setStretchLastSection(true);
-    for (int row = 0; row < awardNames.size(); ++row) {
-        auto *item = new QTableWidgetItem;
-        item->setTextAlignment(Qt::AlignCenter);
-        m_dxccChallengeTable->setItem(row, 0, item);
-    }
+    m_dxccChallengeTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_dxccChallengeTable->setAlternatingRowColors(true);
+    m_dxccChallengeTable->setSortingEnabled(true);
 
     m_tabWidget = new QTabWidget(this);
     m_tabWidget->addTab(m_tableView, tr("Contacts"));
@@ -369,19 +390,35 @@ void MainWindow::updateStats()
                                    .arg(stats.entitiesWorked));
     }
 
-    Database::DxccAwardCredits credits;
-    QString creditsError;
-    if (!Database::dxccAwardCredits(&credits, &creditsError)) {
-        qWarning() << "Failed to compute DXCC award credits:" << creditsError;
+    QVector<Database::DxccEntityProgress> progress;
+    QString progressError;
+    if (!Database::dxccEntityProgress(&progress, &progressError)) {
+        qWarning() << "Failed to compute DXCC entity progress:" << progressError;
         return;
     }
 
-    // Row order matches setupUi()'s awardNames: mode awards, then band
-    // awards, then Challenge.
-    int row = 0;
-    for (int mode : credits.modeCredits)
-        m_dxccChallengeTable->item(row++, 0)->setText(QString::number(mode));
-    for (int band : credits.bandCredits)
-        m_dxccChallengeTable->item(row++, 0)->setText(QString::number(band));
-    m_dxccChallengeTable->item(row, 0)->setText(QString::number(credits.challengeCredits));
+    m_dxccChallengeTable->setSortingEnabled(false);
+    m_dxccChallengeTable->setRowCount(progress.size());
+
+    for (int row = 0; row < progress.size(); ++row) {
+        const Database::DxccEntityProgress &entity = progress.at(row);
+
+        m_dxccChallengeTable->setItem(row, 0, new QTableWidgetItem(entity.prefix));
+        m_dxccChallengeTable->setItem(row, 1, new QTableWidgetItem(entity.entityName));
+
+        for (int col = 0; col < kDxccModeColumnCount; ++col) {
+            const bool confirmed = entity.modeConfirmed[kDxccModeColumns[col].rowIndex];
+            auto *item = new QTableWidgetItem(confirmed ? QStringLiteral("X") : QString());
+            item->setTextAlignment(Qt::AlignCenter);
+            m_dxccChallengeTable->setItem(row, kDxccInfoColumnCount + col, item);
+        }
+        for (int col = 0; col < Database::kDxccChallengeBandCount; ++col) {
+            auto *item = new QTableWidgetItem(entity.bandConfirmed[col] ? QStringLiteral("X") : QString());
+            item->setTextAlignment(Qt::AlignCenter);
+            m_dxccChallengeTable->setItem(row, kDxccInfoColumnCount + kDxccModeColumnCount + col, item);
+        }
+    }
+
+    m_dxccChallengeTable->setSortingEnabled(true);
+    m_dxccChallengeTable->resizeColumnsToContents();
 }

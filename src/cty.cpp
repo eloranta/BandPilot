@@ -13,6 +13,18 @@ QMap<QString, QString> &prefixMap()
     return map;
 }
 
+// Country name -> that record's own primary-prefix field (e.g. "Monaco" ->
+// "3A"), one entry per cty.dat record. Separate from prefixMap() (which is
+// keyed by prefix, not name, and includes every alias too) -- this exists
+// purely so callers that already have a country name (from
+// countryForCallsign() or allCountryNames()) can recover a representative
+// prefix for it, e.g. to display alongside the entity in a table.
+QMap<QString, QString> &countryPrimaryPrefixMap()
+{
+    static QMap<QString, QString> map;
+    return map;
+}
+
 // Exact-callsign overrides ("=CALL" entries), keyed by the full callsign
 // verbatim. Kept separate from prefixMap() because these must only match a
 // callsign that equals the key exactly -- unlike ordinary prefixes, they
@@ -89,6 +101,7 @@ bool load(const QString &filePath, QString *errorMessage)
     // lines; that's fine since we only split on ',' and ':').
     QMap<QString, QString> map;
     QMap<QString, QString> exact;
+    QMap<QString, QString> countryPrefix;
     const QStringList records = content.split(QLatin1Char(';'));
     for (const QString &record : records) {
         const QString trimmedRecord = record.trimmed();
@@ -100,8 +113,10 @@ bool load(const QString &filePath, QString *errorMessage)
             continue; // malformed/partial record
 
         const QString name = fields.at(0).trimmed();
+        const QString primaryPrefix = bareAlias(fields.at(7));
 
-        map.insert(bareAlias(fields.at(7)), name); // primary prefix
+        map.insert(primaryPrefix, name);
+        countryPrefix.insert(name, primaryPrefix);
         for (const QString &rawAlias : fields.at(8).split(QLatin1Char(','))) {
             const QString trimmedAlias = rawAlias.trimmed();
             const QString bare = bareAlias(trimmedAlias);
@@ -122,6 +137,7 @@ bool load(const QString &filePath, QString *errorMessage)
 
     prefixMap() = std::move(map);
     exactMap() = std::move(exact);
+    countryPrimaryPrefixMap() = std::move(countryPrefix);
     loadedFlag() = true;
     return true;
 }
@@ -174,6 +190,20 @@ QString countryForCallsign(const QString &callsign)
     }
 
     return longestPrefixMatch(callsign);
+}
+
+QStringList allCountryNames()
+{
+    if (!loadedFlag())
+        return {};
+    return countryPrimaryPrefixMap().keys();
+}
+
+QString primaryPrefixForCountry(const QString &countryName)
+{
+    if (!loadedFlag())
+        return QString();
+    return countryPrimaryPrefixMap().value(countryName);
 }
 
 } // namespace Cty

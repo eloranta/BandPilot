@@ -5,6 +5,9 @@
 #include <QSqlQuery>
 #include <QTest>
 #include <QTextStream>
+#include <QVector>
+
+#include <algorithm>
 
 #include "cty.h"
 #include "database.h"
@@ -29,7 +32,7 @@ private slots:
     void vietnamResolves();
     void cocosIslandsResolveDistinctly();
 
-    void dxccAwardCreditsClassifiesModesAndBands();
+    void dxccEntityProgressTracksModesAndBands();
 
     void importLotwAdifSkipsDuplicates();
     void importLotwAdifToleratesMissingFields();
@@ -263,7 +266,7 @@ void TstDatabase::importLotwAdifToleratesMissingFields()
              qPrintable(cleanup.lastError().text()));
 }
 
-void TstDatabase::dxccAwardCreditsClassifiesModesAndBands()
+void TstDatabase::dxccEntityProgressTracksModesAndBands()
 {
     QSqlDatabase db = QSqlDatabase::database(Database::connectionName());
     QSqlQuery insert(db);
@@ -305,38 +308,64 @@ void TstDatabase::dxccAwardCreditsClassifiesModesAndBands()
         QVERIFY2(insert.exec(), qPrintable(insert.lastError().text()));
     }
 
-    Database::DxccAwardCredits credits;
+    QVector<Database::DxccEntityProgress> progress;
     QString errorMessage;
-    QVERIFY2(Database::dxccAwardCredits(&credits, &errorMessage), qPrintable(errorMessage));
+    QVERIFY2(Database::dxccEntityProgress(&progress, &errorMessage), qPrintable(errorMessage));
+
+    // Every current ARRL entity is listed, worked or not.
+    QCOMPARE(progress.size(), 340);
+    QVERIFY(std::is_sorted(progress.begin(), progress.end(),
+                            [](const auto &a, const auto &b) { return a.entityCode < b.entityCode; }));
+
+    const auto findRow = [&](int entityCode) -> const Database::DxccEntityProgress & {
+        const auto it = std::find_if(progress.cbegin(), progress.cend(), [entityCode](const auto &row) {
+            return row.entityCode == entityCode;
+        });
+        Q_ASSERT(it != progress.cend());
+        return *it;
+    };
 
     const QStringList &rowNames = Database::dxccChallengeRowNames();
     const QStringList &bandNames = Database::dxccChallengeBandNames();
     const int mixedRow = rowNames.indexOf(QStringLiteral("Mixed"));
     const int cwRow = rowNames.indexOf(QStringLiteral("CW"));
     const int phoneRow = rowNames.indexOf(QStringLiteral("Phone"));
+    const int digitalRow = rowNames.indexOf(QStringLiteral("Digital"));
     const int satelliteRow = rowNames.indexOf(QStringLiteral("Satellite"));
     const int band20m = bandNames.indexOf(QStringLiteral("20M"));
     const int band40m = bandNames.indexOf(QStringLiteral("40M"));
     const int band2m = bandNames.indexOf(QStringLiteral("2M"));
     const int band10m = bandNames.indexOf(QStringLiteral("10M"));
 
-    // Mode credits (any band): entity 1 confirmed via both CW and SSB, so
-    // it's exactly one Mixed credit -- not two.
-    QCOMPARE(credits.modeCredits[mixedRow], 2); // entity 1, entity 6
-    QCOMPARE(credits.modeCredits[cwRow], 1); // entity 1 (CW)
-    QCOMPARE(credits.modeCredits[phoneRow], 1); // entity 1 (SSB)
-    QCOMPARE(credits.modeCredits[satelliteRow], 1); // entity 6, via satellite only
+    // Entity 1 (Canada): confirmed via both CW and SSB on 20M, plus CW on
+    // 40M -- Mixed/CW/Phone all confirmed, Digital/Satellite not.
+    const Database::DxccEntityProgress &canada = findRow(1);
+    QCOMPARE(canada.prefix, QStringLiteral("VE")); // real cty.dat primary prefix
+    QVERIFY(canada.modeConfirmed[mixedRow]);
+    QVERIFY(canada.modeConfirmed[cwRow]);
+    QVERIFY(canada.modeConfirmed[phoneRow]);
+    QVERIFY(!canada.modeConfirmed[digitalRow]);
+    QVERIFY(!canada.modeConfirmed[satelliteRow]);
+    QVERIFY(canada.bandConfirmed[band20m]);
+    QVERIFY(canada.bandConfirmed[band40m]);
+    QVERIFY(!canada.bandConfirmed[band2m]);
 
-    // Band credits (any mode): entity 6's 2M QSO landing under Satellite
-    // must not also inflate the Phone mode credit above.
-    QCOMPARE(credits.bandCredits[band20m], 1); // entity 1
-    QCOMPARE(credits.bandCredits[band40m], 1); // entity 1
-    QCOMPARE(credits.bandCredits[band2m], 1); // entity 6, satellite QSO still counts for the 2M band credit
-    QCOMPARE(credits.bandCredits[band10m], 0); // entity 6's 10M QSO was unconfirmed
+    // Entity 6 (Alaska): FM via satellite on 2M (must land in Satellite
+    // only, not Phone, despite FM being a phone mode) plus one unconfirmed
+    // QSO on 10M that must be excluded entirely.
+    const Database::DxccEntityProgress &alaska = findRow(6);
+    QCOMPARE(alaska.prefix, QStringLiteral("KL"));
+    QVERIFY(alaska.modeConfirmed[mixedRow]);
+    QVERIFY(!alaska.modeConfirmed[phoneRow]);
+    QVERIFY(alaska.modeConfirmed[satelliteRow]);
+    QVERIFY(alaska.bandConfirmed[band2m]);
+    QVERIFY(!alaska.bandConfirmed[band10m]); // unconfirmed QSO excluded
 
-    // Challenge: entity 1 occupies 20M and 40M (2 slots, CW+SSB on 20M
-    // collapse into one slot); entity 6 occupies one "SAT" slot -- 3 total.
-    QCOMPARE(credits.challengeCredits, 3);
+    // An entity with no QSOs at all is still listed, entirely unconfirmed.
+    const Database::DxccEntityProgress &untouched = findRow(7); // Albania
+    QVERIFY(!untouched.modeConfirmed[mixedRow]);
+    for (bool confirmed : untouched.bandConfirmed)
+        QVERIFY(!confirmed);
 
     QSqlQuery cleanup(db);
     QVERIFY2(cleanup.exec(QStringLiteral("DELETE FROM contacts WHERE call IN ('VE1AAA', 'KL7BBB')")),

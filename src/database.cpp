@@ -450,14 +450,12 @@ const QHash<QString, int> &dxccCodeOverrides()
     return overrides;
 }
 
-// Best-effort DXCC entity code for a callsign via cty.dat (if loaded),
-// correlated to this app's dxcc_entity table by (direct code override,
-// then name override, then fuzzy name match). Returns -1 if cty.dat isn't
-// loaded, the callsign matches no prefix, or the matched country name
+// Best-effort DXCC entity code for a cty.dat country name, correlated to
+// this app's dxcc_entity table by (direct code override, then name
+// override, then fuzzy name match). Returns -1 if country is empty or
 // doesn't correlate to a known entity.
-int dxccCodeForCallsign(const QString &callsign)
+int dxccCodeForCountryName(const QString &country)
 {
-    const QString country = Cty::countryForCallsign(callsign);
     if (country.isEmpty())
         return -1;
 
@@ -472,6 +470,14 @@ int dxccCodeForCallsign(const QString &callsign)
         overrideIt != dxccNameOverrides().constEnd() ? overrideIt.value() : country;
 
     return dxccNameIndex().value(normalizeEntityName(lookupName), -1);
+}
+
+// Best-effort DXCC entity code for a callsign via cty.dat (if loaded).
+// Returns -1 if cty.dat isn't loaded, the callsign matches no prefix, or
+// the matched country name doesn't correlate to a known entity.
+int dxccCodeForCallsign(const QString &callsign)
+{
+    return dxccCodeForCountryName(Cty::countryForCallsign(callsign));
 }
 
 // Re-tries the callsign -> DXCC lookup for any contact still sitting at the
@@ -840,16 +846,58 @@ const QStringList &dxccChallengeBandNames()
     return names;
 }
 
-bool dxccAwardCredits(DxccAwardCredits *credits, QString *errorMessage)
+// A representative cty.dat primary prefix for every DXCC entity code that
+// at least one loaded cty.dat record correlates to. When more than one
+// cty.dat record maps to the same entity (e.g. "Asiatic Turkey" and
+// "European Turkey" both -> Turkey, via dxccNameOverrides()), the first
+// one encountered (in Cty::allCountryNames() order, i.e. alphabetically by
+// cty.dat country name) wins -- an arbitrary but deterministic choice,
+// since this prefix is purely for display. Empty if cty.dat isn't loaded.
+QHash<int, QString> entityPrimaryPrefixes()
+{
+    QHash<int, QString> result;
+    for (const QString &countryName : Cty::allCountryNames()) {
+        const int code = dxccCodeForCountryName(countryName);
+        if (code < 1 || code > 999 || result.contains(code))
+            continue;
+        result.insert(code, Cty::primaryPrefixForCountry(countryName));
+    }
+    return result;
+}
+
+bool dxccEntityProgress(QVector<DxccEntityProgress> *rows, QString *errorMessage)
 {
     QSqlDatabase db = QSqlDatabase::database(kConnectionName);
-    QSqlQuery query(db);
-    if (!query.exec(QStringLiteral("SELECT dxcc_entity, band, mode, prop_mode FROM contacts "
-                                    "WHERE dxcc_entity IS NOT NULL AND dxcc_entity != %1 "
-                                    "AND UPPER(TRIM(qsl)) = 'Y'")
-                         .arg(kUnknownDxccCode))) {
+
+    QSqlQuery entityQuery(db);
+    if (!entityQuery.exec(QStringLiteral("SELECT entity_code, entity FROM dxcc_entity "
+                                          "WHERE entity_code != %1 ORDER BY entity_code")
+                               .arg(kUnknownDxccCode))) {
         if (errorMessage)
-            *errorMessage = query.lastError().text();
+            *errorMessage = entityQuery.lastError().text();
+        return false;
+    }
+
+    const QHash<int, QString> prefixes = entityPrimaryPrefixes();
+
+    rows->clear();
+    QHash<int, int> rowIndexForEntity;
+    while (entityQuery.next()) {
+        DxccEntityProgress row;
+        row.entityCode = entityQuery.value(0).toInt();
+        row.entityName = entityQuery.value(1).toString();
+        row.prefix = prefixes.value(row.entityCode);
+        rowIndexForEntity.insert(row.entityCode, rows->size());
+        rows->append(row);
+    }
+
+    QSqlQuery contactQuery(db);
+    if (!contactQuery.exec(QStringLiteral("SELECT dxcc_entity, band, mode, prop_mode FROM contacts "
+                                           "WHERE dxcc_entity IS NOT NULL AND dxcc_entity != %1 "
+                                           "AND UPPER(TRIM(qsl)) = 'Y'")
+                                .arg(kUnknownDxccCode))) {
+        if (errorMessage)
+            *errorMessage = contactQuery.lastError().text();
         return false;
     }
 
@@ -857,54 +905,42 @@ bool dxccAwardCredits(DxccAwardCredits *credits, QString *errorMessage)
         QStringLiteral("SSB"), QStringLiteral("USB"), QStringLiteral("LSB"),
         QStringLiteral("AM"),  QStringLiteral("FM"),  QStringLiteral("FMN"),
     };
-
     const QStringList &bandNames = dxccChallengeBandNames();
 
-    QSet<int> modeEntities[kDxccChallengeRowCount];
-    QSet<int> bandEntities[kDxccChallengeBandCount];
-    QSet<QString> challengeSlots;
+    while (contactQuery.next()) {
+        const int entity = contactQuery.value(0).toInt();
+        const auto rowIt = rowIndexForEntity.constFind(entity);
+        if (rowIt == rowIndexForEntity.constEnd())
+            continue; // confirmed contact against an entity code not in dxcc_entity (shouldn't happen)
+        DxccEntityProgress &row = (*rows)[rowIt.value()];
 
-    while (query.next()) {
-        const int entity = query.value(0).toInt();
-        const QString band = query.value(1).toString().trimmed().toUpper();
-        const QString mode = query.value(2).toString().trimmed().toUpper();
-        const QString propMode = query.value(3).toString().trimmed().toUpper();
+        const QString band = contactQuery.value(1).toString().trimmed().toUpper();
+        const QString mode = contactQuery.value(2).toString().trimmed().toUpper();
+        const QString propMode = contactQuery.value(3).toString().trimmed().toUpper();
         const bool isSatellite = propMode == QStringLiteral("SAT");
 
         const int bandIndex = bandNames.indexOf(band);
         if (bandIndex >= 0)
-            bandEntities[bandIndex].insert(entity);
+            row.bandConfirmed[bandIndex] = true;
 
-        modeEntities[0].insert(entity); // Mixed: no mode restriction
-
-        // The Challenge award counts distinct (entity, band) slots across
-        // any mode; a satellite QSO occupies a slot of its own ("SAT")
-        // rather than the literal band it used.
-        challengeSlots.insert(QString::number(entity) + QLatin1Char('|')
-                               + (isSatellite ? QStringLiteral("SAT") : band));
+        row.modeConfirmed[0] = true; // Mixed: no mode restriction
 
         if (isSatellite) {
-            modeEntities[4].insert(entity); // Satellite
+            row.modeConfirmed[4] = true; // Satellite
             continue; // a satellite QSO isn't also a CW/Phone/Digital one
         }
 
         if (!mode.isEmpty()) {
-            int row;
+            int modeRow;
             if (mode == QStringLiteral("CW"))
-                row = 1;
+                modeRow = 1;
             else if (kPhoneModes.contains(mode))
-                row = 2;
+                modeRow = 2;
             else
-                row = 3; // Digital: everything else (RTTY, PSK31, FT8, FT4, ...)
-            modeEntities[row].insert(entity);
+                modeRow = 3; // Digital: everything else (RTTY, PSK31, FT8, FT4, ...)
+            row.modeConfirmed[modeRow] = true;
         }
     }
-
-    for (int row = 0; row < kDxccChallengeRowCount; ++row)
-        credits->modeCredits[row] = modeEntities[row].size();
-    for (int col = 0; col < kDxccChallengeBandCount; ++col)
-        credits->bandCredits[col] = bandEntities[col].size();
-    credits->challengeCredits = challengeSlots.size();
 
     return true;
 }

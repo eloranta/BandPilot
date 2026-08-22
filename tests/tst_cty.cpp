@@ -37,6 +37,7 @@ private slots:
     void primaryPrefixWithoutAliasEntry();
     void exactCallOverrideKeepsSlash();
     void noMatchReturnsEmpty();
+    void primaryPrefixAndCountryEnumeration();
 
     // These reload Cty:: from the real, checked-in cty.dat (tests/data/cty.dat)
     // instead of the synthetic fixture above, so they must run after the
@@ -101,6 +102,23 @@ void TstCty::noMatchReturnsEmpty()
 {
     QCOMPARE(Cty::countryForCallsign(QStringLiteral("ZZ9ZZZ")), QString());
     QCOMPARE(Cty::countryForCallsign(QString()), QString());
+}
+
+void TstCty::primaryPrefixAndCountryEnumeration()
+{
+    const QStringList names = Cty::allCountryNames();
+    QCOMPARE(names.size(), 5); // one per record in kFixture
+    QVERIFY(names.contains(QStringLiteral("Test Country A")));
+    QVERIFY(names.contains(QStringLiteral("Test Exception Land")));
+
+    // Each record's own primary-prefix field, not an alias -- "Test
+    // Exception Land"'s primary prefix is "9M6X", distinct from its only
+    // alias, the exact override "=9M6/LA6VM(...)".
+    QCOMPARE(Cty::primaryPrefixForCountry(QStringLiteral("Test Country A")), QStringLiteral("W"));
+    QCOMPARE(Cty::primaryPrefixForCountry(QStringLiteral("Test Country B (Hawaii)")), QStringLiteral("KH6"));
+    QCOMPARE(Cty::primaryPrefixForCountry(QStringLiteral("Test Exception Land")), QStringLiteral("9M6X"));
+    QCOMPARE(Cty::primaryPrefixForCountry(QStringLiteral("Solo Primary Land")), QStringLiteral("ZP1"));
+    QCOMPARE(Cty::primaryPrefixForCountry(QStringLiteral("No Such Country")), QString());
 }
 
 void TstCty::realCtyDatLoads()
