@@ -33,6 +33,7 @@ private slots:
     void cocosIslandsResolveDistinctly();
 
     void dxccEntityProgressTracksModesAndBands();
+    void dxccEntityProgressPrefersRealPrefixOverAsteriskedOne();
 
     void importLotwAdifSkipsDuplicates();
     void importLotwAdifToleratesMissingFields();
@@ -370,6 +371,34 @@ void TstDatabase::dxccEntityProgressTracksModesAndBands()
     QSqlQuery cleanup(db);
     QVERIFY2(cleanup.exec(QStringLiteral("DELETE FROM contacts WHERE call IN ('VE1AAA', 'KL7BBB')")),
              qPrintable(cleanup.lastError().text()));
+}
+
+void TstDatabase::dxccEntityProgressPrefersRealPrefixOverAsteriskedOne()
+{
+    // "African Italy" (cty.dat primary prefix "*IG9") and "Bear Island"
+    // ("*JW/b") are AD1C's "informational only, not a separate DXCC
+    // entity" placeholder records -- both correlate, via
+    // dxccNameOverrides(), to a real entity that also has its own normal
+    // cty.dat record (Italy, Svalbard). The placeholder's name sorts
+    // alphabetically before the real one ("African Italy" < "Italy",
+    // "Bear Island" < "Svalbard"), so a naive "first name wins" tie-break
+    // would show the bogus "*..." prefix instead of the entity's real one
+    // -- and worse, sort it to the top of a prefix-sorted table, since '*'
+    // sorts before any letter or digit.
+    QVector<Database::DxccEntityProgress> progress;
+    QString errorMessage;
+    QVERIFY2(Database::dxccEntityProgress(&progress, &errorMessage), qPrintable(errorMessage));
+
+    const auto findRow = [&](int entityCode) -> const Database::DxccEntityProgress & {
+        const auto it = std::find_if(progress.cbegin(), progress.cend(), [entityCode](const auto &row) {
+            return row.entityCode == entityCode;
+        });
+        Q_ASSERT(it != progress.cend());
+        return *it;
+    };
+
+    QCOMPARE(findRow(248).prefix, QStringLiteral("I")); // Italy
+    QCOMPARE(findRow(259).prefix, QStringLiteral("JW")); // Svalbard
 }
 
 void TstDatabase::clearAllContactsDeletesEverything()

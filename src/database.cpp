@@ -849,18 +849,33 @@ const QStringList &dxccChallengeBandNames()
 // A representative cty.dat primary prefix for every DXCC entity code that
 // at least one loaded cty.dat record correlates to. When more than one
 // cty.dat record maps to the same entity (e.g. "Asiatic Turkey" and
-// "European Turkey" both -> Turkey, via dxccNameOverrides()), the first
-// one encountered (in Cty::allCountryNames() order, i.e. alphabetically by
-// cty.dat country name) wins -- an arbitrary but deterministic choice,
-// since this prefix is purely for display. Empty if cty.dat isn't loaded.
+// "European Turkey" both -> Turkey, via dxccNameOverrides()), a normal
+// (non-asterisked) record always wins over an asterisked one -- AD1C
+// prefixes a primary prefix with '*' to mark "informational only, not a
+// separate DXCC entity" (e.g. "*IG9" for African Italy, "*JW/b" for Bear
+// Island, both of which correlate here to their real parent entity, Italy
+// and Svalbard respectively); showing that placeholder instead of the
+// entity's own real prefix ("I", "JW") would be actively misleading, and
+// worse, sorts to the top of a prefix-sorted list ('*' < any letter/digit).
+// Otherwise the first one encountered (in Cty::allCountryNames() order,
+// i.e. alphabetically by cty.dat country name) wins -- an arbitrary but
+// deterministic choice, since this prefix is purely for display. Empty if
+// cty.dat isn't loaded.
 QHash<int, QString> entityPrimaryPrefixes()
 {
     QHash<int, QString> result;
     for (const QString &countryName : Cty::allCountryNames()) {
         const int code = dxccCodeForCountryName(countryName);
-        if (code < 1 || code > 999 || result.contains(code))
+        if (code < 1 || code > 999)
             continue;
-        result.insert(code, Cty::primaryPrefixForCountry(countryName));
+
+        const QString prefix = Cty::primaryPrefixForCountry(countryName);
+        const auto it = result.constFind(code);
+        if (it == result.constEnd()) {
+            result.insert(code, prefix);
+        } else if (it.value().startsWith(QLatin1Char('*')) && !prefix.startsWith(QLatin1Char('*'))) {
+            result.insert(code, prefix); // replace a placeholder with a real prefix
+        }
     }
     return result;
 }
