@@ -480,20 +480,27 @@ int dxccCodeForCallsign(const QString &callsign)
     return dxccCodeForCountryName(Cty::countryForCallsign(callsign));
 }
 
-// Re-tries the callsign -> DXCC lookup for any contact still sitting at the
-// "(Unknown)" sentinel (or, defensively, still NULL) now that cty.dat is
-// loaded, so QSOs imported before cty.dat existed -- or before it was last
-// updated -- get resolved without needing to be re-imported.
-bool backfillUnresolvedDxccEntities(QString *errorMessage)
+// Re-runs the callsign -> DXCC lookup for every contact (not just ones
+// still sitting at the "(Unknown)" sentinel or NULL) now that cty.dat is
+// loaded, and corrects any row whose stored dxcc_entity disagrees with
+// what the current lookup logic resolves. This covers both QSOs imported
+// before cty.dat existed (or before it was last updated) and, just as
+// importantly, QSOs that resolved to a definite but *wrong* entity under
+// an earlier version of the lookup heuristic -- e.g. a fixed bug in
+// Cty::countryForCallsign() couldn't otherwise self-heal existing data,
+// since re-importing (ADIF or LoTW) never updates an already-logged
+// contact. Only ever moves a contact from no-match/wrong-match to a
+// definite match; never clears an existing valid resolution just because
+// the current callsign fails to resolve (that would be a regression, not
+// a correction).
+bool resolveDxccEntities(QString *errorMessage)
 {
     if (!Cty::isLoaded())
         return true; // nothing to look up without a cty.dat
 
     QSqlDatabase db = QSqlDatabase::database(kConnectionName);
     QSqlQuery select(db);
-    if (!select.exec(QStringLiteral(
-            "SELECT id, call FROM contacts WHERE dxcc_entity IS NULL OR dxcc_entity = %1")
-                          .arg(kUnknownDxccCode))) {
+    if (!select.exec(QStringLiteral("SELECT id, call, dxcc_entity FROM contacts"))) {
         if (errorMessage)
             *errorMessage = select.lastError().text();
         return false;
@@ -507,8 +514,12 @@ bool backfillUnresolvedDxccEntities(QString *errorMessage)
     QVector<Resolution> resolutions;
     while (select.next()) {
         const int code = dxccCodeForCallsign(select.value(1).toString());
-        if (code >= 1 && code <= 999)
-            resolutions.append({select.value(0).toInt(), code});
+        if (code < 1 || code > 999)
+            continue;
+        const QVariant stored = select.value(2);
+        if (!stored.isNull() && stored.toInt() == code)
+            continue; // already correct; skip the write
+        resolutions.append({select.value(0).toInt(), code});
     }
 
     if (resolutions.isEmpty())
@@ -700,7 +711,7 @@ bool initialize(QString *errorMessage)
 
     Cty::load(ctyFilePath()); // best-effort; ADIF import works fine without it
 
-    if (!backfillUnresolvedDxccEntities(errorMessage))
+    if (!resolveDxccEntities(errorMessage))
         return false;
 
     return true;

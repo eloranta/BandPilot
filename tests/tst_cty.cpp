@@ -164,6 +164,19 @@ void TstCty::realCtyDatKnownCallsigns()
     // Sweden operation), and must stay Finland despite "SA" also being a
     // real Swedish prefix.
     QCOMPARE(Cty::countryForCallsign(QStringLiteral("OH1BGG/SA")), QStringLiteral("Finland"));
+
+    // The opposite portable convention -- "COUNTRYPREFIX/homecall" (common
+    // in Europe/Africa), e.g. an Italian ham (home call IW1RBI) operating
+    // from Monaco signs "3A/IW1RBI". The short "3A" segment before the
+    // slash is the country change; "IW1RBI" is just the home call, and
+    // must NOT be prefix-matched on its own even though it legitimately
+    // starts with Italy's real prefix "I" -- that's exactly the false
+    // match this heuristic exists to avoid. Found via real BandPilot data:
+    // three Monaco QSOs (3A/IW1RBI, 3A/PB8DX, 3A/F6EXV) were silently
+    // misattributed to Italy, the Netherlands, and France respectively.
+    QCOMPARE(Cty::countryForCallsign(QStringLiteral("3A/IW1RBI")), QStringLiteral("Monaco"));
+    QCOMPARE(Cty::countryForCallsign(QStringLiteral("3A/PB8DX")), QStringLiteral("Monaco"));
+    QCOMPARE(Cty::countryForCallsign(QStringLiteral("3A/F6EXV")), QStringLiteral("Monaco"));
 }
 
 QTEST_APPLESS_MAIN(TstCty)

@@ -159,33 +159,50 @@ QString countryForCallsign(const QString &callsign)
     if (exactIt != exactMap().constEnd())
         return exactIt.value();
 
-    // A portable-operation suffix -- e.g. "K6VHF/HR9" for a US ham signing
-    // Honduras -- denotes a DXCC entity change and takes precedence over
-    // the home call's own prefix, unless the suffix is an operating-mode
-    // indicator (mobile, portable, maritime/aeronautical mobile, QRP) or a
-    // bare call-area digit, neither of which changes the country. This is
-    // a heuristic, not exact: a handful of countries (e.g. Nordic special-
-    // activation suffixes like "/LH", "/SA") reuse another country's
-    // prefix letters for a non-country marker; cty.dat resolves those via
-    // curated exact overrides, which are still checked first, above.
+    // A portable operation denotes a DXCC entity change and takes
+    // precedence over the home call's own prefix -- but hams write this
+    // two different ways, and both are common: "homecall/COUNTRYPREFIX"
+    // (e.g. "K6VHF/HR9", a US ham signing Honduras) and
+    // "COUNTRYPREFIX/homecall" (e.g. "3A/IW1RBI", an Italian ham signing
+    // Monaco). The genuine country-changing segment is essentially always
+    // the *shorter* of the two -- real DXCC prefixes are 1-4 characters,
+    // while a home callsign is longer -- so try whichever side of the
+    // slash is shorter first (ties favor the suffix, matching plain
+    // "homecall/AREA" digits like "W1AW/4"). The other side is never
+    // tried on its own: a home call very often itself starts with some
+    // country's real prefix (e.g. "IW1RBI" legitimately starts with
+    // Italy's "I"), so blindly prefix-matching the *longer* segment would
+    // just silently resolve to the visiting ham's home country instead of
+    // where they were actually operating.
+    //
+    // Excluded from either side: operating-mode indicators (mobile,
+    // portable, maritime/aeronautical mobile, QRP) and bare call-area
+    // digits, neither of which changes the country. This is a heuristic,
+    // not exact: a handful of countries (e.g. Nordic special-activation
+    // suffixes like "/LH", "/SA") reuse another country's prefix letters
+    // for a non-country marker; cty.dat resolves those via curated exact
+    // overrides, which are still checked first, above.
     const int slash = callsign.lastIndexOf(QLatin1Char('/'));
     if (slash > 0 && slash < callsign.size() - 1) {
-        const QString suffix = callsign.mid(slash + 1);
+        const QString before = callsign.left(slash);
+        const QString after = callsign.mid(slash + 1);
+        const QString &candidate = after.size() <= before.size() ? after : before;
+
         static const QSet<QString> kOperatingModeSuffixes = {
             QStringLiteral("M"),  QStringLiteral("P"),   QStringLiteral("MM"),
             QStringLiteral("AM"), QStringLiteral("A"),   QStringLiteral("QRP"),
         };
-        bool numericSuffix = true;
-        for (const QChar c : suffix) {
+        bool numeric = !candidate.isEmpty();
+        for (const QChar c : candidate) {
             if (!c.isDigit()) {
-                numericSuffix = false;
+                numeric = false;
                 break;
             }
         }
-        if (!numericSuffix && !kOperatingModeSuffixes.contains(suffix)) {
-            const QString suffixCountry = longestPrefixMatch(suffix);
-            if (!suffixCountry.isEmpty())
-                return suffixCountry;
+        if (!numeric && !kOperatingModeSuffixes.contains(candidate)) {
+            const QString candidateCountry = longestPrefixMatch(candidate);
+            if (!candidateCountry.isEmpty())
+                return candidateCountry;
         }
     }
 
